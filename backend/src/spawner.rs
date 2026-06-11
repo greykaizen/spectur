@@ -143,11 +143,18 @@ fn select_downloader(url: &str) -> Downloader {
 
 fn build_args(tool: &Downloader, url: &str, output_path: &str) -> Vec<String> {
     match tool.binary {
-        "N_m3u8DL-RE" => vec![
-            url.to_string(),
-            "--save-dir".into(),
-            output_path.to_string(),
-        ],
+        "N_m3u8DL-RE" => {
+            let path = std::path::Path::new(output_path);
+            let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("/tmp/spectur-downloads");
+            let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("download");
+            vec![
+                url.to_string(),
+                "--save-dir".into(),
+                parent.to_string(),
+                "--save-name".into(),
+                file_stem.to_string(),
+            ]
+        }
         "aria2c" => vec![
             url.to_string(),
             "-d".into(),
