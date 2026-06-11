@@ -44,15 +44,21 @@ pub struct WsMessage {
     pub manifest_content: Option<String>,
     pub key: Option<Vec<u8>>,
     pub href: Option<String>,
+    #[serde(rename = "streamingData")]
+    pub streaming_data: Option<serde_json::Value>,
 }
 
 impl WsMessage {
     pub fn is_stream_payload(&self) -> bool {
-        self.msg_type.as_deref() != Some("keyIntercepted") && self.url.is_some()
+        self.msg_type.is_none() && self.url.is_some()
     }
 
     pub fn is_key_intercepted(&self) -> bool {
         self.msg_type.as_deref() == Some("keyIntercepted")
+    }
+
+    pub fn is_youtube_formats(&self) -> bool {
+        self.msg_type.as_deref() == Some("youtubeFormats")
     }
 
     pub fn to_stream_payload(&self) -> Option<StreamPayload> {
@@ -93,6 +99,9 @@ pub struct KeyPayload {
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub intercepted_keys: Vec<KeyPayload>,
+    pub yt_formats: Vec<YtFormat>,
+    pub yt_page_url: Option<String>,
+    pub selected_yt_format_index: usize,
     pub selected_tab_index: usize,
     pub selected_stream_index: usize,
     pub selected_resolution_index: usize,
@@ -163,6 +172,58 @@ pub struct KeyInfo {
     pub uri: Option<String>,
     pub iv: Option<String>,
     pub keyformat: Option<String>,
+    pub key_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct YtFormat {
+    pub itag: i64,
+    pub mime_type: String,
+    pub bitrate: Option<i64>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub fps: Option<i64>,
+    pub quality_label: Option<String>,
+    pub content_length: Option<String>,
+    pub approx_duration_ms: Option<String>,
+    pub audio_channels: Option<i64>,
+    pub audio_sample_rate: Option<String>,
+}
+
+impl YtFormat {
+    pub fn is_video(&self) -> bool {
+        self.width.is_some() && self.height.is_some()
+    }
+
+    pub fn is_audio_only(&self) -> bool {
+        self.mime_type.starts_with("audio/")
+    }
+
+    pub fn resolution_label(&self) -> String {
+        if let (Some(w), Some(h)) = (self.width, self.height) {
+            if let Some(ref ql) = self.quality_label {
+                format!("{}x{} ({})", w, h, ql)
+            } else {
+                format!("{}x{}", w, h)
+            }
+        } else if let Some(ref ql) = self.quality_label {
+            ql.clone()
+        } else if self.is_audio_only() {
+            format!("Audio (itag {})", self.itag)
+        } else {
+            format!("itag {}", self.itag)
+        }
+    }
+
+    pub fn short_label(&self) -> String {
+        if let Some(ref ql) = self.quality_label {
+            ql.clone()
+        } else if self.is_audio_only() {
+            "Audio".into()
+        } else {
+            format!("itag {}", self.itag)
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -206,10 +267,13 @@ impl AppState {
             selected_tab_index: 0,
             selected_stream_index: 0,
             selected_resolution_index: 0,
+            selected_yt_format_index: 0,
             tabs: Vec::new(),
             downloads: Vec::new(),
             tui_logs: Vec::new(),
             intercepted_keys: Vec::new(),
+            yt_formats: Vec::new(),
+            yt_page_url: None,
             focused_panel: Panel::Streams,
         }
     }

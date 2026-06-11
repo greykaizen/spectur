@@ -15,6 +15,48 @@ export default defineContentScript({
           var _postKey = function(keyBytes) {
             window.postMessage({ type: 'SPECTUR_KEY_INTERCEPTED', key: keyBytes, href: window.location.href }, '*');
           };
+          var _postYTFormats = function(formats) {
+            window.postMessage({ type: 'SPECTUR_YT_FORMATS', formats: formats, href: window.location.href }, '*');
+          };
+
+          // ---- ytInitialPlayerResponse observer (YouTube-specific) ----
+          // YT sets this on window when page loads with video data including all formats
+          try {
+            if (/youtube\.com/.test(window.location.hostname)) {
+              var _desc = Object.getOwnPropertyDescriptor(window, 'ytInitialPlayerResponse');
+              var _ytValue;
+              if (_desc) {
+                _ytValue = _desc.value;
+              }
+              Object.defineProperty(window, 'ytInitialPlayerResponse', {
+                get: function() { return _ytValue; },
+                set: function(v) {
+                  _ytValue = v;
+                  try {
+                    var data = JSON.parse(JSON.stringify(v));
+                    if (data && data.streamingData) {
+                      _postYTFormats(data.streamingData);
+                    }
+                  } catch(e) {}
+                },
+                configurable: true,
+                enumerable: true
+              });
+              // Also check for ytplayer.config.args.player_response
+              var checkInterval = setInterval(function() {
+                try {
+                  if (window.ytplayer && window.ytplayer.config && window.ytplayer.config.args && window.ytplayer.config.args.player_response) {
+                    var pr = JSON.parse(window.ytplayer.config.args.player_response);
+                    if (pr && pr.streamingData) {
+                      _postYTFormats(pr.streamingData);
+                    }
+                    clearInterval(checkInterval);
+                  }
+                } catch(e) {}
+              }, 500);
+              setTimeout(function() { clearInterval(checkInterval); }, 15000);
+            }
+          } catch(e) {}
 
           // ---- WebCrypto importKey hook (zero-competitor advantage) ----
           // All modern players (HLS.js, Shaka, Dash.js) call crypto.subtle.importKey
@@ -251,6 +293,16 @@ export default defineContentScript({
           browser.runtime.sendMessage({
             action: 'keyIntercepted',
             key,
+            href
+          });
+        } catch (_) {}
+      }
+      if (event.data && event.data.type === 'SPECTUR_YT_FORMATS') {
+        const { formats, href } = event.data;
+        try {
+          browser.runtime.sendMessage({
+            action: 'youtubeFormats',
+            streamingData: formats,
             href
           });
         } catch (_) {}

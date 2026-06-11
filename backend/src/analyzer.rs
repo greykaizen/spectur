@@ -196,6 +196,7 @@ fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<d
                     uri: sess_key.0.uri.clone(),
                     iv: sess_key.0.iv.clone(),
                     keyformat: sess_key.0.keyformat.clone(),
+                    key_hex: None,
                 });
             }
 
@@ -227,6 +228,7 @@ fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<d
                             uri: key.uri.clone(),
                             iv: key.iv.clone(),
                             keyformat: key.keyformat.clone(),
+                            key_hex: None,
                         });
                     }
                 }

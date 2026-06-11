@@ -359,6 +359,20 @@ export default defineBackground(() => {
       };
       sendKeyPayload(keyPayload);
     }
+
+    if (message.action === 'youtubeFormats') {
+      const pageUrl = sender.tab?.url || '';
+      const pageTitle = sender.tab?.title || '';
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+          type: 'youtubeFormats',
+          pageUrl,
+          pageTitle,
+          streamingData: message.streamingData,
+          timestamp: Date.now()
+        }));
+      }
+    }
   });
 
   connectWebSocket();
