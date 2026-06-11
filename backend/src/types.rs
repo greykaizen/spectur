@@ -72,12 +72,35 @@ pub struct StreamMetadata {
     pub total_segments: usize,
     pub resolutions: Vec<ResolutionInfo>,
     pub audio_tracks: Vec<String>,
+    pub keys: Vec<KeyInfo>,
+    pub drm: Vec<DrmInfo>,
+    pub segment_base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolutionInfo {
     pub label: String,
     pub bandwidth: u64,
+    pub codecs: Option<String>,
+    pub frame_rate: Option<String>,
+    pub mime_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyInfo {
+    pub method: String,
+    pub uri: Option<String>,
+    pub iv: Option<String>,
+    pub keyformat: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrmInfo {
+    pub system: String,
+    pub scheme_id_uri: String,
+    pub pssh_data: Option<String>,
+    pub default_kid: Option<String>,
+    pub license_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]

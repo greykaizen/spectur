@@ -19,9 +19,14 @@ export default defineBackground(() => {
   const MEDIA_MIME_TYPES = [
     'application/vnd.apple.mpegurl',
     'application/x-mpegURL',
+    'application/mpegurl',
     'application/dash+xml',
     'video/mp4',
     'video/webm',
+    'application/m4s',
+    'application/octet-stream-m3u8',
+    'application/x-mpegurl',
+    'application/vnd.apple.mpegurl',
   ];
 
   const activeRequests = new Map<string, Partial<StreamPayload>>();
@@ -36,9 +41,7 @@ export default defineBackground(() => {
   function isMediaMimeType(mime: string): boolean {
     const lower = mime.toLowerCase();
     if (lower.startsWith('video/')) {
-      if (lower.includes('mp2t')) {
-        return false;
-      }
+      if (lower.includes('mp2t')) return false;
       return true;
     }
     return MEDIA_MIME_TYPES.some(t => lower.startsWith(t.toLowerCase()));
@@ -60,15 +63,8 @@ export default defineBackground(() => {
   }
 
   function connectWebSocket(): void {
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-    try {
-      ws = new WebSocket(WS_URL);
-    } catch {
-      scheduleReconnect();
-      return;
-    }
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    try { ws = new WebSocket(WS_URL); } catch { scheduleReconnect(); return; }
     ws.onopen = () => { reconnectDelay = 1000; };
     ws.onerror = () => { ws?.close(); };
     ws.onclose = () => { ws = null; scheduleReconnect(); };
@@ -108,15 +104,11 @@ export default defineBackground(() => {
 
   function isAudioOnly(url: string, contentType: string): boolean {
     const lowerMime = contentType.toLowerCase();
-    if (lowerMime.startsWith('audio/')) {
-      return true;
-    }
+    if (lowerMime.startsWith('audio/')) return true;
     try {
       const parsed = new URL(url);
       const path = parsed.pathname.toLowerCase();
-      if (/\/(audio|aac|mp3|m4a|ogg|opus)(\/|\?|\.|$)/i.test(path)) {
-        return true;
-      }
+      if (/\/(audio|aac|mp3|m4a|ogg|opus)(\/|\?|\.|$)/i.test(path)) return true;
     } catch (_) {}
     return false;
   }
@@ -152,16 +144,8 @@ export default defineBackground(() => {
       if (responseHeaders) existing.responseHeaders = { ...existing.responseHeaders, ...responseHeaders };
       if (serverIp) existing.serverIp = serverIp;
     } else {
-      capturedMediaRequests.push({
-        url,
-        timestamp: now,
-        method: method || 'GET',
-        requestHeaders: requestHeaders || {},
-        responseHeaders: responseHeaders || {},
-        serverIp: serverIp || '',
-      });
+      capturedMediaRequests.push({ url, timestamp: now, method: method || 'GET', requestHeaders: requestHeaders || {}, responseHeaders: responseHeaders || {}, serverIp: serverIp || '' });
     }
-    // Clean up older than 20 seconds
     const limit = now - 20000;
     while (capturedMediaRequests.length > 0 && capturedMediaRequests[0].timestamp < limit) {
       capturedMediaRequests.shift();
@@ -263,9 +247,7 @@ export default defineBackground(() => {
   );
 
   browser.webRequest.onErrorOccurred.addListener(
-    (details) => {
-      activeRequests.delete(details.requestId);
-    },
+    (details) => { activeRequests.delete(details.requestId); },
     { urls: ['<all_urls>'] }
   );
 
@@ -293,7 +275,6 @@ export default defineBackground(() => {
       
       if (message.isPageUrl) {
         const now = Date.now();
-        // Clean up first
         const limit = now - 20000;
         while (capturedMediaRequests.length > 0 && capturedMediaRequests[0].timestamp < limit) {
           capturedMediaRequests.shift();
@@ -301,17 +282,13 @@ export default defineBackground(() => {
 
         const format = message.format;
         const candidates = capturedMediaRequests.filter(r => {
-          if (format === 'm3u8') {
-            return r.url.toLowerCase().includes('.m3u8');
-          } else if (format === 'mpd') {
-            return r.url.toLowerCase().includes('.mpd');
-          }
+          if (format === 'm3u8') return r.url.toLowerCase().includes('.m3u8');
+          else if (format === 'mpd') return r.url.toLowerCase().includes('.mpd');
           return false;
         });
 
         if (candidates.length > 0) {
           candidates.sort((a, b) => b.timestamp - a.timestamp);
-
           const content = message.content || '';
           const isMaster = content.includes('#EXT-X-STREAM-INF') || content.includes('#EXT-X-MEDIA');
           
@@ -327,18 +304,14 @@ export default defineBackground(() => {
               return urlLower.includes('video') || urlLower.includes('audio') || urlLower.includes('track');
             });
           }
-
-          if (!selectedCandidate) {
-            selectedCandidate = candidates[0];
-          }
-
+          if (!selectedCandidate) selectedCandidate = candidates[0];
           matchedUrl = selectedCandidate.url;
           matchedHeaders = selectedCandidate.requestHeaders;
           matchedResponseHeaders = { ...selectedCandidate.responseHeaders, ...matchedResponseHeaders };
           matchedServerIp = selectedCandidate.serverIp;
         } else {
           let activeMediaUrl = '';
-          for (const [id, entry] of activeRequests.entries()) {
+          for (const [, entry] of activeRequests.entries()) {
             if (entry.url && (entry.url.includes('.m3u8') || entry.url.includes('.mpd'))) {
               activeMediaUrl = entry.url;
               break;
@@ -346,21 +319,13 @@ export default defineBackground(() => {
           }
           if (activeMediaUrl) {
             matchedUrl = activeMediaUrl;
-            const entry = activeRequests.get(matchedUrl) || {};
-            matchedHeaders = entry.requestHeaders || {};
-            matchedResponseHeaders = { ...entry.responseHeaders, ...matchedResponseHeaders };
-            matchedServerIp = entry.serverIp || '';
           } else if (lastCapturedMediaUrl && Date.now() - lastCapturedTimestamp < 15000) {
             matchedUrl = lastCapturedMediaUrl;
           }
         }
       }
 
-      if (!matchedUrl || matchedUrl === pageUrl) {
-        if (message.isPageUrl && matchedUrl === pageUrl) {
-          return;
-        }
-      }
+      if (!matchedUrl || matchedUrl === pageUrl) return;
       
       const payload: StreamPayload = {
         requestId: 'decrypted-' + Date.now(),

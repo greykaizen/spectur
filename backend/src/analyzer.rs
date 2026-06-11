@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use futures_util::StreamExt;
 
-use crate::types::{AppState, ResolutionInfo, StreamMetadata, StreamFormat};
+use crate::types::{AppState, DrmInfo, KeyInfo, ResolutionInfo, StreamMetadata, StreamFormat};
 
 pub async fn analyze_manifest(
     state: Arc<Mutex<AppState>>,
@@ -112,6 +112,20 @@ async fn fetch_with_redirects(
     }
 }
 
+fn resolve_segment_base(base_url: &str, segment_uri: &str) -> Option<String> {
+    if segment_uri.starts_with("http://") || segment_uri.starts_with("https://") {
+        return Some(segment_uri.to_string());
+    }
+    if let Ok(base) = url::Url::parse(base_url) {
+        match base.join(segment_uri) {
+            Ok(resolved) => Some(resolved.to_string()),
+            Err(_) => None,
+        }
+    } else {
+        None
+    }
+}
+
 async fn parse_hls(
     url: &str,
     headers: HashMap<String, String>,
@@ -123,7 +137,22 @@ async fn parse_hls(
 
     let body = fetch_with_redirects(&client, url, &headers).await?;
     let meta = parse_hls_content(&body)?;
+    let base_url = extract_base_url(url);
+    let meta = StreamMetadata {
+        segment_base_url: Some(base_url),
+        ..meta
+    };
     Ok((meta, StreamFormat::Hls))
+}
+
+fn extract_base_url(url: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(url) {
+        if let Some(last_slash) = parsed.as_str().rfind('/') {
+            let base = &parsed.as_str()[..last_slash + 1];
+            return base.to_string();
+        }
+    }
+    url.to_string()
 }
 
 fn parse_hls_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
@@ -134,13 +163,21 @@ fn parse_hls_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::E
         m3u8_rs::Playlist::MasterPlaylist(master) => {
             let mut resolutions = Vec::new();
             let mut audio_tracks = Vec::new();
+            let mut keys = Vec::new();
+            let drm = Vec::new();
 
             for variant in &master.variants {
                 if let Some(res) = &variant.resolution {
                     let label = format!("{}x{}", res.width, res.height);
                     let bw = variant.bandwidth;
                     if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
-                        resolutions.push(ResolutionInfo { label, bandwidth: bw });
+                        resolutions.push(ResolutionInfo {
+                            label,
+                            bandwidth: bw,
+                            codecs: variant.codecs.clone(),
+                            frame_rate: variant.frame_rate.clone().map(|f| format!("{:.3}", f)),
+                            mime_type: None,
+                        });
                     }
                 }
             }
@@ -151,22 +188,56 @@ fn parse_hls_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::E
                 }
             }
 
+            for sess_key in &master.session_key {
+                keys.push(KeyInfo {
+                    method: format!("{:?}", sess_key.0.method),
+                    uri: sess_key.0.uri.clone(),
+                    iv: sess_key.0.iv.clone(),
+                    keyformat: sess_key.0.keyformat.clone(),
+                });
+            }
+
             Ok(StreamMetadata {
                 duration_seconds: 0.0,
                 total_segments: 0,
                 resolutions,
                 audio_tracks,
+                keys,
+                drm,
+                segment_base_url: None,
             })
         }
         m3u8_rs::Playlist::MediaPlaylist(media) => {
             let duration: f32 = media.segments.iter().map(|s| s.duration).sum();
             let total_segments = media.segments.len();
+            let resolutions = Vec::new();
+            let audio_tracks = Vec::new();
+            let drm = Vec::new();
+
+            let mut keys = Vec::new();
+            let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for seg in &media.segments {
+                if let Some(key) = &seg.key {
+                    let key_id = format!("{:?}:{}", key.method, key.uri.as_deref().unwrap_or(""));
+                    if seen_keys.insert(key_id) {
+                        keys.push(KeyInfo {
+                            method: format!("{:?}", key.method),
+                            uri: key.uri.clone(),
+                            iv: key.iv.clone(),
+                            keyformat: key.keyformat.clone(),
+                        });
+                    }
+                }
+            }
 
             Ok(StreamMetadata {
                 duration_seconds: duration,
                 total_segments,
-                resolutions: Vec::new(),
-                audio_tracks: Vec::new(),
+                resolutions,
+                audio_tracks,
+                keys,
+                drm,
+                segment_base_url: None,
             })
         }
     }
@@ -183,6 +254,11 @@ async fn parse_dash(
 
     let body = fetch_with_redirects(&client, url, &headers).await?;
     let meta = parse_dash_content(&body)?;
+    let base_url = extract_base_url(url);
+    let meta = StreamMetadata {
+        segment_base_url: Some(base_url),
+        ..meta
+    };
     Ok((meta, StreamFormat::Dash))
 }
 
@@ -197,6 +273,7 @@ fn parse_dash_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::
 
     let mut resolutions = Vec::new();
     let mut audio_tracks = Vec::new();
+    let mut drm_infos = Vec::new();
 
     for period in &mpd.periods {
         for adaptation in &period.adaptations {
@@ -209,7 +286,13 @@ fn parse_dash_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::
                         let label = format!("{}x{}", w, h);
                         let bw = rep.bandwidth.unwrap_or(0);
                         if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
-                            resolutions.push(ResolutionInfo { label, bandwidth: bw });
+                            resolutions.push(ResolutionInfo {
+                                label,
+                                bandwidth: bw,
+                                codecs: rep.codecs.clone(),
+                                frame_rate: rep.frameRate.clone(),
+                                mime_type: rep.mimeType.clone(),
+                            });
                         }
                     }
                 }
@@ -219,6 +302,41 @@ fn parse_dash_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::
                     }
                 }
             }
+        }
+    }
+
+    let mut all_drm = Vec::new();
+    all_drm.extend(mpd.ContentProtection.iter().cloned());
+    for period in &mpd.periods {
+        all_drm.extend(period.ContentProtection.iter().cloned());
+        for adaptation in &period.adaptations {
+            all_drm.extend(adaptation.ContentProtection.iter().cloned());
+            for rep in &adaptation.representations {
+                all_drm.extend(rep.ContentProtection.iter().cloned());
+            }
+        }
+    }
+
+    for cp in &all_drm {
+        let system = classify_drm(cp);
+        let pssh_data = cp.cenc_pssh.first()
+            .and_then(|p| p.content.clone());
+        let license_url = cp.laurl.as_ref()
+            .and_then(|l| l.content.clone())
+            .or_else(|| cp.clearkey_laurl.as_ref().and_then(|l| l.content.clone()));
+
+        let unique_dedup = format!("{}-{:?}", cp.schemeIdUri, cp.default_KID);
+        if !drm_infos.iter().any(|d: &DrmInfo| {
+            let ddedup = format!("{}-{:?}", d.scheme_id_uri, d.default_kid);
+            ddedup == unique_dedup
+        }) {
+            drm_infos.push(DrmInfo {
+                system,
+                scheme_id_uri: cp.schemeIdUri.clone(),
+                pssh_data,
+                default_kid: cp.default_KID.clone(),
+                license_url,
+            });
         }
     }
 
@@ -241,7 +359,36 @@ fn parse_dash_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::
         total_segments,
         resolutions,
         audio_tracks,
+        keys: Vec::new(),
+        drm: drm_infos,
+        segment_base_url: None,
     })
+}
+
+fn classify_drm(cp: &dash_mpd::ContentProtection) -> String {
+    let uri = cp.schemeIdUri.to_lowercase();
+    if uri.contains("edef8ba9-79d6-4ace-a3c8-27dcd51d21ed") {
+        return "Widevine".into();
+    }
+    if uri.contains("9a04f079-9840-4286-ab92-e65be0885f95") {
+        return "PlayReady".into();
+    }
+    if uri.contains("94ce86fb-07ff-4f43-adb8-93d2fa968ca2") {
+        return "FairPlay".into();
+    }
+    if uri.contains("1077efec-c0b2-4d02-ace3-3c1e52e2fb4b") {
+        return "ClearKey".into();
+    }
+    if uri.contains("mp4protection") {
+        return "CENC".into();
+    }
+    if let Some(v) = &cp.value {
+        let v = v.to_lowercase();
+        if v.contains("widevine") { return "Widevine".into(); }
+        if v.contains("playready") { return "PlayReady".into(); }
+        if v.contains("cenc") { return "CENC".into(); }
+    }
+    "Unknown".into()
 }
 
 async fn parse_mp4(
@@ -317,7 +464,7 @@ async fn parse_mp4(
 
         let mut stream = resp.bytes_stream();
         let mut total_downloaded = 0;
-        let limit = 1048576; // 1MB
+        let limit = 1048576;
         while let Some(item) = stream.next().await {
             let chunk = item?;
             let chunk_len = chunk.len();
@@ -343,12 +490,14 @@ async fn parse_mp4(
     let mp4_reader = match mp4::Mp4Reader::read_header(cursor, size) {
         Ok(r) => r,
         Err(_) => {
-            // Fallback for non-faststart (moov at end) or generic errors
             return Ok((StreamMetadata {
                 duration_seconds: 0.0,
                 total_segments: 1,
                 resolutions: Vec::new(),
                 audio_tracks: Vec::new(),
+                keys: Vec::new(),
+                drm: Vec::new(),
+                segment_base_url: None,
             }, StreamFormat::Mp4));
         }
     };
@@ -371,7 +520,13 @@ async fn parse_mp4(
                     if w > 0 && h > 0 {
                         let label = format!("{}x{}", w, h);
                         if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
-                            resolutions.push(ResolutionInfo { label, bandwidth: 0 });
+                            resolutions.push(ResolutionInfo {
+                                label,
+                                bandwidth: 0,
+                                codecs: None,
+                                frame_rate: None,
+                                mime_type: None,
+                            });
                         }
                     }
                 }
@@ -388,6 +543,9 @@ async fn parse_mp4(
         total_segments: 1,
         resolutions,
         audio_tracks,
+        keys: Vec::new(),
+        drm: Vec::new(),
+        segment_base_url: None,
     }, StreamFormat::Mp4))
 }
 
