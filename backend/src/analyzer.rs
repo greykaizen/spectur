@@ -36,11 +36,11 @@ async fn detect_and_fetch(
             let content_upper = content.to_uppercase();
             if let Some(idx) = content_upper.find("#EXTM3U") {
                 let trimmed_content = &content[idx..];
-                if let Ok(meta) = parse_hls_content(trimmed_content) {
+                if let Ok(meta) = parse_hls_content(trimmed_content, url) {
                     return Ok((meta, StreamFormat::Hls));
                 }
             } else if content_upper.contains("<MPD") && content_upper.contains("</MPD>") {
-                if let Ok(meta) = parse_dash_content(&content) {
+                if let Ok(meta) = parse_dash_content(&content, url) {
                     return Ok((meta, StreamFormat::Dash));
                 }
             }
@@ -136,8 +136,8 @@ async fn parse_hls(
         .build()?;
 
     let body = fetch_with_redirects(&client, url, &headers).await?;
-    let meta = parse_hls_content(&body)?;
     let base_url = extract_base_url(url);
+    let meta = parse_hls_content(&body, &base_url)?;
     let meta = StreamMetadata {
         segment_base_url: Some(base_url),
         ..meta
@@ -155,7 +155,7 @@ fn extract_base_url(url: &str) -> String {
     url.to_string()
 }
 
-fn parse_hls_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
+fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
     let (_, playlist) = m3u8_rs::parse_playlist(body.as_bytes())
         .map_err(|e| format!("m3u8 parse error: {:?}", e))?;
 
@@ -170,6 +170,7 @@ fn parse_hls_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::E
                 if let Some(res) = &variant.resolution {
                     let label = format!("{}x{}", res.width, res.height);
                     let bw = variant.bandwidth;
+                    let variant_url = resolve_segment_base(base_url, &variant.uri).unwrap_or(variant.uri.clone());
                     if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
                         resolutions.push(ResolutionInfo {
                             label,
@@ -177,6 +178,7 @@ fn parse_hls_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::E
                             codecs: variant.codecs.clone(),
                             frame_rate: variant.frame_rate.clone().map(|f| format!("{:.3}", f)),
                             mime_type: None,
+                            url: Some(variant_url),
                         });
                     }
                 }
@@ -253,8 +255,8 @@ async fn parse_dash(
         .build()?;
 
     let body = fetch_with_redirects(&client, url, &headers).await?;
-    let meta = parse_dash_content(&body)?;
     let base_url = extract_base_url(url);
+    let meta = parse_dash_content(&body, &base_url)?;
     let meta = StreamMetadata {
         segment_base_url: Some(base_url),
         ..meta
@@ -262,7 +264,7 @@ async fn parse_dash(
     Ok((meta, StreamFormat::Dash))
 }
 
-fn parse_dash_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
+fn parse_dash_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
     let mpd = dash_mpd::parse(body)
         .map_err(|e| format!("MPD parse error: {:?}", e))?;
 
@@ -279,19 +281,29 @@ fn parse_dash_content(body: &str) -> Result<StreamMetadata, Box<dyn std::error::
         for adaptation in &period.adaptations {
             let is_video = adaptation.contentType.as_deref() == Some("video");
             let is_audio = adaptation.contentType.as_deref() == Some("audio");
+            let as_codecs = adaptation.codecs.clone();
+            let as_fps = adaptation.frameRate.clone();
+            let as_mime = adaptation.mimeType.clone();
 
             for rep in &adaptation.representations {
+                let codecs = rep.codecs.clone().or_else(|| as_codecs.clone());
+                let frame_rate = rep.frameRate.clone().or_else(|| as_fps.clone());
+                let mime_type = rep.mimeType.clone().or_else(|| as_mime.clone());
+
                 if is_video {
                     if let (Some(w), Some(h)) = (rep.width, rep.height) {
                         let label = format!("{}x{}", w, h);
                         let bw = rep.bandwidth.unwrap_or(0);
+                        let rep_url = rep.id.clone()
+                            .and_then(|id| resolve_segment_base(base_url, &id));
                         if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
                             resolutions.push(ResolutionInfo {
                                 label,
                                 bandwidth: bw,
-                                codecs: rep.codecs.clone(),
-                                frame_rate: rep.frameRate.clone(),
-                                mime_type: rep.mimeType.clone(),
+                                codecs,
+                                frame_rate,
+                                mime_type,
+                                url: rep_url,
                             });
                         }
                     }
@@ -526,6 +538,7 @@ async fn parse_mp4(
                                 codecs: None,
                                 frame_rate: None,
                                 mime_type: None,
+                                url: None,
                             });
                         }
                     }
@@ -601,17 +614,20 @@ async fn probe_format_and_parse(
 
     if content_type.contains("mpegurl") {
         let body = resp.text().await?;
-        let meta = parse_hls_content(&body)?;
+        let base_url = extract_base_url(url);
+        let meta = parse_hls_content(&body, &base_url)?;
         Ok((meta, StreamFormat::Hls))
     } else if content_type.contains("dash+xml") {
         let body = resp.text().await?;
-        let meta = parse_dash_content(&body)?;
+        let base_url = extract_base_url(url);
+        let meta = parse_dash_content(&body, &base_url)?;
         Ok((meta, StreamFormat::Dash))
     } else if content_type.contains("video/mp4") || content_type.contains("video/") || content_type.contains("audio/") {
         parse_mp4(url, headers).await
     } else {
         let body = resp.text().await?;
-        if let Ok(meta) = parse_hls_content(&body) {
+        let base_url = extract_base_url(url);
+        if let Ok(meta) = parse_hls_content(&body, &base_url) {
             Ok((meta, StreamFormat::Hls))
         } else {
             Err("unknown format or unsupported media".into())

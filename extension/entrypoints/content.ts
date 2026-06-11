@@ -12,6 +12,29 @@ export default defineContentScript({
           var _post = function(url, content, format, isPageUrl) {
             window.postMessage({ type: 'SPECTUR_DECRYPTED', url: url, content: content, format: format, isPageUrl: isPageUrl }, '*');
           };
+          var _postKey = function(keyBytes) {
+            window.postMessage({ type: 'SPECTUR_KEY_INTERCEPTED', key: keyBytes, href: window.location.href }, '*');
+          };
+
+          // ---- WebCrypto importKey hook (zero-competitor advantage) ----
+          // All modern players (HLS.js, Shaka, Dash.js) call crypto.subtle.importKey
+          // with raw AES-128 keys. Intercept this for 100% key capture with zero noise.
+          if (window.crypto && window.crypto.subtle) {
+            var _importKey = window.crypto.subtle.importKey;
+            window.crypto.subtle.importKey = function(format, keyData, algorithm, extractable, keyUsages) {
+              if (format === 'raw' && keyData) {
+                try {
+                  var buf = null;
+                  if (keyData instanceof ArrayBuffer) buf = keyData;
+                  else if (keyData.buffer instanceof ArrayBuffer) buf = keyData.buffer;
+                  if (buf && buf.byteLength === 16) {
+                    _postKey(Array.from(new Uint8Array(buf)));
+                  }
+                } catch(e) {}
+              }
+              return _importKey.apply(this, arguments);
+            };
+          }
 
           // ---- atob hook ----
           var _atob = window.atob;
@@ -28,12 +51,12 @@ export default defineContentScript({
             return res;
           };
 
-          // ---- btoa hook (cat-catch style: 24-char base64 = 16-byte key) ----
+          // ---- btoa hook ----
           var _btoa = window.btoa;
           window.btoa = function(str) {
             var res = _btoa.apply(this, arguments);
             if (str && str.length === 16) {
-              try { _post(window.location.href, '', 'm3u8', true); } catch(e) {}
+              try { _postKey([]); } catch(e) {}
             }
             return res;
           };
@@ -60,7 +83,6 @@ export default defineContentScript({
             try {
               var clone = res.clone();
               var url = typeof input === 'string' ? input : (input && input.url) || '';
-              // Try text first
               clone.text().then(function(text) {
                 var upper = text.toUpperCase();
                 if (upper.indexOf('#EXTM3U') !== -1) {
@@ -108,7 +130,7 @@ export default defineContentScript({
             return _open.apply(this, arguments);
           };
 
-          // ---- String.indexOf hook (cat-catch: detect #EXTM3U in whole page) ----
+          // ---- String.indexOf hook ----
           var _indexOf = String.prototype.indexOf;
           String.prototype.indexOf = function(searchValue, fromIndex) {
             var out = _indexOf.apply(this, arguments);
@@ -119,7 +141,7 @@ export default defineContentScript({
             return out;
           };
 
-          // ---- Array.join hook (cat-catch: detect m3u8 in joined arrays) ----
+          // ---- Array.join hook ----
           var _arrayJoin = Array.prototype.join;
           Array.prototype.join = function() {
             var data = _arrayJoin.apply(this, arguments);
@@ -139,19 +161,12 @@ export default defineContentScript({
             return data;
           };
 
-          // ---- Uint8Array constructor hook (cat-catch: detect 16-byte key) ----
+          // ---- Uint8Array constructor hook ----
           var _Uint8Array = window.Uint8Array;
           var _OriginalU8 = _Uint8Array;
           window.Uint8Array = function(arg) {
-            var instance;
-            if (this instanceof window.Uint8Array) {
-              instance = new _OriginalU8(arg);
-            } else {
-              instance = new _OriginalU8(arg);
-            }
-            if (instance.byteLength === 16) {
-              _post(window.location.href, '', 'm3u8', true);
-            }
+            var instance = new _OriginalU8(arg);
+            if (instance.byteLength === 16) _postKey(Array.from(instance));
             return instance;
           };
           window.Uint8Array.prototype = _OriginalU8.prototype;
@@ -160,28 +175,50 @@ export default defineContentScript({
           var _subarray = _OriginalU8.prototype.subarray;
           _OriginalU8.prototype.subarray = function(begin, end) {
             var result = _subarray.call(this, begin, end);
-            if (result.byteLength === 16) {
-              _post(window.location.href, '', 'm3u8', true);
-            }
+            if (result.byteLength === 16) _postKey(Array.from(result));
             return result;
           };
 
-          // ---- Array.prototype.slice hook (cat-catch: 16-element numeric arrays = key) ----
+          // ---- Uint16Array constructor hook ----
+          var _Uint16Array = window.Uint16Array;
+          var _OriginalU16 = _Uint16Array;
+          window.Uint16Array = function(arg) {
+            var instance = new _OriginalU16(arg);
+            if (instance.length === 8) { // 8 x uint16 = 16 bytes
+              _postKey(Array.from(new Uint8Array(instance.buffer, instance.byteOffset, 16)));
+            }
+            return instance;
+          };
+          window.Uint16Array.prototype = _OriginalU16.prototype;
+
+          // ---- Uint32Array constructor hook ----
+          var _Uint32Array = window.Uint32Array;
+          var _OriginalU32 = _Uint32Array;
+          window.Uint32Array = function(arg) {
+            var instance = new _OriginalU32(arg);
+            if (instance.length === 4) { // 4 x uint32 = 16 bytes
+              _postKey(Array.from(new Uint8Array(instance.buffer, instance.byteOffset, 16)));
+            }
+            return instance;
+          };
+          window.Uint32Array.prototype = _OriginalU32.prototype;
+
+          // ---- Array.prototype.slice hook ----
           var _slice = Array.prototype.slice;
           Array.prototype.slice = function() {
             var result = _slice.apply(this, arguments);
             if (result.length === 16 && result.every(function(x) { return typeof x === 'number' && x <= 255; })) {
-              _post(window.location.href, '', 'm3u8', true);
+              _postKey(result);
             }
             return result;
           };
 
-          // ---- DataView hooks (cat-catch: detect 16-byte buffer writes) ----
+          // ---- DataView hooks ----
           var _DataView = window.DataView;
           window.DataView = function(buffer, byteOffset, byteLength) {
             var dv = new _DataView(buffer, byteOffset, byteLength);
             if (dv.byteLength === 16) {
-              _post(window.location.href, '', 'm3u8', true);
+              _postKey(Array.from(new Uint8Array(buffer, byteOffset || 0, 16)));
             }
             return dv;
           };
@@ -205,6 +242,16 @@ export default defineContentScript({
             content,
             format,
             isPageUrl
+          });
+        } catch (_) {}
+      }
+      if (event.data && event.data.type === 'SPECTUR_KEY_INTERCEPTED') {
+        const { key, href } = event.data;
+        try {
+          browser.runtime.sendMessage({
+            action: 'keyIntercepted',
+            key,
+            href
           });
         } catch (_) {}
       }

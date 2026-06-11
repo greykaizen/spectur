@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::accept_async;
 use futures_util::StreamExt;
 
-use crate::types::{AppState, StreamPayload};
+use crate::types::{AppState, WsMessage};
 
 pub async fn start_ws_server(state: Arc<Mutex<AppState>>) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind("127.0.0.1:8080").await?;
@@ -31,20 +31,32 @@ async fn handle_connection(
         match result {
             Ok(msg) => {
                 if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
-                    match serde_json::from_str::<StreamPayload>(&text) {
-                        Ok(payload) => {
-                            let url = payload.url.clone();
-                            let headers = payload.request_headers.clone();
-                            let manifest_content = payload.manifest_content.clone();
+                    match serde_json::from_str::<WsMessage>(&text) {
+                        Ok(ws_msg) => {
+                            if ws_msg.is_key_intercepted() {
+                                if let Some(key_payload) = ws_msg.to_key_payload() {
+                                    let mut app = state.lock().await;
+                                    let key_hex: String = key_payload.key.iter()
+                                        .map(|b| format!("{:02x}", b))
+                                        .collect();
+                                    let href = key_payload.href.clone();
+                                    app.intercepted_keys.push(key_payload);
+                                    app.tui_logs.push(format!("AES-128 key intercepted: {} from {}", key_hex, href));
+                                }
+                            } else if let Some(payload) = ws_msg.to_stream_payload() {
+                                let url = payload.url.clone();
+                                let headers = payload.request_headers.clone();
+                                let manifest_content = payload.manifest_content.clone();
 
-                            let mut app = state.lock().await;
-                            let (tab_idx, exists) = app.add_stream(payload);
+                                let mut app = state.lock().await;
+                                let (tab_idx, exists) = app.add_stream(payload);
 
-                            if !exists {
-                                let analyzer_state = Arc::clone(&state);
-                                tokio::spawn(async move {
-                                    crate::analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
-                                });
+                                if !exists {
+                                    let analyzer_state = Arc::clone(&state);
+                                    tokio::spawn(async move {
+                                        crate::analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
+                                    });
+                                }
                             }
                         }
                         Err(e) => {

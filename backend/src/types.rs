@@ -21,8 +21,78 @@ pub struct StreamPayload {
     pub manifest_content: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WsMessage {
+    #[serde(rename = "type")]
+    pub msg_type: Option<String>,
+    #[serde(rename = "requestId")]
+    pub request_id: Option<String>,
+    pub url: Option<String>,
+    pub method: Option<String>,
+    #[serde(rename = "requestHeaders")]
+    pub request_headers: Option<HashMap<String, String>>,
+    #[serde(rename = "responseHeaders")]
+    pub response_headers: Option<HashMap<String, String>>,
+    #[serde(rename = "serverIp")]
+    pub server_ip: Option<String>,
+    #[serde(rename = "pageUrl")]
+    pub page_url: Option<String>,
+    #[serde(rename = "pageTitle")]
+    pub page_title: Option<String>,
+    pub timestamp: Option<u64>,
+    #[serde(rename = "manifestContent")]
+    pub manifest_content: Option<String>,
+    pub key: Option<Vec<u8>>,
+    pub href: Option<String>,
+}
+
+impl WsMessage {
+    pub fn is_stream_payload(&self) -> bool {
+        self.msg_type.as_deref() != Some("keyIntercepted") && self.url.is_some()
+    }
+
+    pub fn is_key_intercepted(&self) -> bool {
+        self.msg_type.as_deref() == Some("keyIntercepted")
+    }
+
+    pub fn to_stream_payload(&self) -> Option<StreamPayload> {
+        Some(StreamPayload {
+            request_id: self.request_id.clone()?,
+            url: self.url.clone()?,
+            method: self.method.clone().unwrap_or_default(),
+            request_headers: self.request_headers.clone().unwrap_or_default(),
+            response_headers: self.response_headers.clone().unwrap_or_default(),
+            server_ip: self.server_ip.clone().unwrap_or_default(),
+            page_url: self.page_url.clone().unwrap_or_default(),
+            page_title: self.page_title.clone().unwrap_or_default(),
+            timestamp: self.timestamp.unwrap_or(0),
+            manifest_content: self.manifest_content.clone(),
+        })
+    }
+
+    pub fn to_key_payload(&self) -> Option<KeyPayload> {
+        Some(KeyPayload {
+            key: self.key.clone()?,
+            href: self.href.clone().unwrap_or_default(),
+            page_url: self.page_url.clone().unwrap_or_default(),
+            page_title: self.page_title.clone().unwrap_or_default(),
+            timestamp: self.timestamp.unwrap_or(0),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct KeyPayload {
+    pub key: Vec<u8>,
+    pub href: String,
+    pub page_url: String,
+    pub page_title: String,
+    pub timestamp: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
+    pub intercepted_keys: Vec<KeyPayload>,
     pub selected_tab_index: usize,
     pub selected_stream_index: usize,
     pub selected_resolution_index: usize,
@@ -84,6 +154,7 @@ pub struct ResolutionInfo {
     pub codecs: Option<String>,
     pub frame_rate: Option<String>,
     pub mime_type: Option<String>,
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -138,6 +209,7 @@ impl AppState {
             tabs: Vec::new(),
             downloads: Vec::new(),
             tui_logs: Vec::new(),
+            intercepted_keys: Vec::new(),
             focused_panel: Panel::Streams,
         }
     }

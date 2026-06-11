@@ -13,20 +13,42 @@ interface StreamPayload {
   manifestContent?: string;
 }
 
+interface KeyPayload {
+  key: number[];
+  href: string;
+  pageUrl: string;
+  pageTitle: string;
+  timestamp: number;
+}
+
 export default defineBackground(() => {
   const WS_URL = 'ws://127.0.0.1:8080';
-  const MEDIA_EXTENSIONS = /\.(m3u8|mpd|mp4|m4v|webm|mov)(\?|$)/i;
+  const MEDIA_EXTENSIONS = /\.(m3u8|mpd|mp4|m4s|m4v|webm|mov|f4m|f4f)(\?|$)/i;
   const MEDIA_MIME_TYPES = [
     'application/vnd.apple.mpegurl',
-    'application/x-mpegURL',
-    'application/mpegurl',
-    'application/dash+xml',
-    'video/mp4',
-    'video/webm',
-    'application/m4s',
-    'application/octet-stream-m3u8',
     'application/x-mpegurl',
-    'application/vnd.apple.mpegurl',
+    'application/mpegurl',
+    'application/octet-stream-m3u8',
+    'audio/vnd.apple.mpegurl',
+    'audio/mpegurl',
+    'audio/x-mpegurl',
+    'application/dash+xml',
+    'video/vnd.mpeg.dash.mpd',
+    'application/m4s',
+    'video/mp4',
+    'video/x-mp4',
+    'video/mpg4',
+    'video/x-mpg4',
+    'video/x-m4v',
+    'video/m4v',
+    'video/mp2t',
+    'video/webm',
+    'audio/webm',
+    'video/x-flv',
+    'video/flv',
+    'application/f4m+xml',
+    'video/f4f',
+    'video/f4m',
   ];
 
   const activeRequests = new Map<string, Partial<StreamPayload>>();
@@ -40,26 +62,11 @@ export default defineBackground(() => {
 
   function isMediaMimeType(mime: string): boolean {
     const lower = mime.toLowerCase();
-    if (lower.startsWith('video/')) {
-      if (lower.includes('mp2t')) return false;
+    if (lower.startsWith('video/') || lower.startsWith('audio/')) {
+      if (lower.includes('mp2t')) return true; // TS segments are media
       return true;
     }
     return MEDIA_MIME_TYPES.some(t => lower.startsWith(t.toLowerCase()));
-  }
-
-  function buildPayload(id: string, partial: Partial<StreamPayload>): StreamPayload {
-    return {
-      requestId: id,
-      url: partial.url || '',
-      method: partial.method || 'GET',
-      requestHeaders: partial.requestHeaders || {},
-      responseHeaders: partial.responseHeaders || {},
-      serverIp: partial.serverIp || '',
-      pageUrl: partial.pageUrl || '',
-      pageTitle: partial.pageTitle || '',
-      timestamp: Date.now(),
-      manifestContent: partial.manifestContent,
-    };
   }
 
   function connectWebSocket(): void {
@@ -87,6 +94,14 @@ export default defineBackground(() => {
     }
   }
 
+  function sendKeyPayload(payload: KeyPayload): void {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'keyIntercepted', ...payload }));
+    } else {
+      connectWebSocket();
+    }
+  }
+
   function headersToRecord(headers: { name: string; value?: string }[] | undefined): Record<string, string> {
     const result: Record<string, string> = {};
     if (!headers) return result;
@@ -100,17 +115,6 @@ export default defineBackground(() => {
 
   function isYouTube(url: string): boolean {
     return /youtube\.com|googlevideo\.com|ytimg\.com/i.test(url);
-  }
-
-  function isAudioOnly(url: string, contentType: string): boolean {
-    const lowerMime = contentType.toLowerCase();
-    if (lowerMime.startsWith('audio/')) return true;
-    try {
-      const parsed = new URL(url);
-      const path = parsed.pathname.toLowerCase();
-      if (/\/(audio|aac|mp3|m4a|ogg|opus)(\/|\?|\.|$)/i.test(path)) return true;
-    } catch (_) {}
-    return false;
   }
 
   let lastCapturedMediaUrl = '';
@@ -133,7 +137,6 @@ export default defineBackground(() => {
     responseHeaders?: Record<string, string>,
     serverIp?: string
   ): void {
-    if (isAudioOnly(url, '')) return;
     const now = Date.now();
     const existingIdx = capturedMediaRequests.findIndex(r => r.url === url);
     if (existingIdx !== -1) {
@@ -157,7 +160,6 @@ export default defineBackground(() => {
       if (isYouTube(details.url)) return;
       if (details.originUrl && isYouTube(details.originUrl)) return;
       if (details.initiator && isYouTube(details.initiator)) return;
-      if (isAudioOnly(details.url, '')) return;
       
       const isMedia = details.url.includes('.m3u8') || details.url.includes('.mpd');
       if (isMedia) {
@@ -182,28 +184,14 @@ export default defineBackground(() => {
     (details) => {
       const entry = activeRequests.get(details.requestId);
       if (!entry) return;
-      const contentType = details.responseHeaders?.find(
-        h => h.name.toLowerCase() === 'content-type'
-      )?.value || '';
+      const contentType = details.responseHeaders?.find(h => h.name.toLowerCase() === 'content-type')?.value || '';
       if (isMediaMimeType(contentType) || isMediaRequest(details.url)) {
-        if (isAudioOnly(details.url, contentType)) {
-          activeRequests.delete(details.requestId);
-          return;
-        }
-        
         const isMedia = details.url.includes('.m3u8') || details.url.includes('.mpd');
         if (isMedia) {
           lastCapturedMediaUrl = details.url;
           lastCapturedTimestamp = Date.now();
-          recordCapturedMedia(
-            details.url,
-            details.method || entry.method || 'GET',
-            entry.requestHeaders,
-            headersToRecord(details.responseHeaders),
-            details.ip || ''
-          );
+          recordCapturedMedia(details.url, details.method || entry.method || 'GET', entry.requestHeaders, headersToRecord(details.responseHeaders), details.ip || '');
         }
-        
         entry.responseHeaders = headersToRecord(details.responseHeaders);
         entry.serverIp = details.ip || '';
       } else {
@@ -219,18 +207,10 @@ export default defineBackground(() => {
       const entry = activeRequests.get(details.requestId);
       if (!entry) return;
       entry.serverIp = details.ip || '';
-      
       const isMedia = details.url.includes('.m3u8') || details.url.includes('.mpd');
       if (isMedia) {
-        recordCapturedMedia(
-          details.url,
-          details.method || entry.method || 'GET',
-          entry.requestHeaders,
-          entry.responseHeaders,
-          details.ip || ''
-        );
+        recordCapturedMedia(details.url, details.method || entry.method || 'GET', entry.requestHeaders, entry.responseHeaders, details.ip || '');
       }
-      
       try {
         const tab = await browser.tabs.get(details.tabId);
         entry.pageUrl = tab.url || '';
@@ -239,9 +219,49 @@ export default defineBackground(() => {
         entry.pageUrl = '';
         entry.pageTitle = '';
       }
-      const payload = buildPayload(details.requestId, entry);
+      const payload: StreamPayload = {
+        requestId: details.requestId,
+        url: entry.url || details.url,
+        method: entry.method || details.method,
+        requestHeaders: entry.requestHeaders || {},
+        responseHeaders: entry.responseHeaders || {},
+        serverIp: entry.serverIp || '',
+        pageUrl: entry.pageUrl || '',
+        pageTitle: entry.pageTitle || '',
+        timestamp: Date.now(),
+        manifestContent: entry.manifestContent,
+      };
       sendPayload(payload);
       activeRequests.delete(details.requestId);
+    },
+    { urls: ['<all_urls>'] }
+  );
+
+  browser.webRequest.onCompleted.addListener(
+    (details) => {
+      const entry = activeRequests.get(details.requestId);
+      if (entry && !entry.pageUrl) {
+        browser.tabs.get(details.tabId).then(tab => {
+          entry.pageUrl = tab.url || '';
+          entry.pageTitle = tab.title || '';
+          const payload: StreamPayload = {
+            requestId: details.requestId,
+            url: entry.url || details.url,
+            method: entry.method || details.method,
+            requestHeaders: entry.requestHeaders || {},
+            responseHeaders: entry.responseHeaders || {},
+            serverIp: entry.serverIp || '',
+            pageUrl: entry.pageUrl || '',
+            pageTitle: entry.pageTitle || '',
+            timestamp: Date.now(),
+            manifestContent: entry.manifestContent,
+          };
+          sendPayload(payload);
+          activeRequests.delete(details.requestId);
+        }).catch(() => {
+          activeRequests.delete(details.requestId);
+        });
+      }
     },
     { urls: ['<all_urls>'] }
   );
@@ -262,7 +282,6 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener(async (message, sender) => {
     if (message.action === 'addDecryptedManifest') {
-      if (isAudioOnly(message.url, '')) return;
       const pageUrl = sender.tab?.url || '';
       const pageTitle = sender.tab?.title || '';
       
@@ -279,47 +298,33 @@ export default defineBackground(() => {
         while (capturedMediaRequests.length > 0 && capturedMediaRequests[0].timestamp < limit) {
           capturedMediaRequests.shift();
         }
-
         const format = message.format;
         const candidates = capturedMediaRequests.filter(r => {
           if (format === 'm3u8') return r.url.toLowerCase().includes('.m3u8');
           else if (format === 'mpd') return r.url.toLowerCase().includes('.mpd');
           return false;
         });
-
         if (candidates.length > 0) {
           candidates.sort((a, b) => b.timestamp - a.timestamp);
           const content = message.content || '';
           const isMaster = content.includes('#EXT-X-STREAM-INF') || content.includes('#EXT-X-MEDIA');
-          
-          let selectedCandidate = null;
-          if (isMaster) {
-            selectedCandidate = candidates.find(r => {
-              const urlLower = r.url.toLowerCase();
-              return urlLower.includes('master') || (!urlLower.includes('video') && !urlLower.includes('audio') && !urlLower.includes('track'));
-            });
-          } else {
-            selectedCandidate = candidates.find(r => {
-              const urlLower = r.url.toLowerCase();
-              return urlLower.includes('video') || urlLower.includes('audio') || urlLower.includes('track');
-            });
-          }
-          if (!selectedCandidate) selectedCandidate = candidates[0];
+          let selectedCandidate = candidates.find(r => {
+            const urlLower = r.url.toLowerCase();
+            if (isMaster) return urlLower.includes('master') || (!urlLower.includes('video') && !urlLower.includes('audio') && !urlLower.includes('track'));
+            return urlLower.includes('video') || urlLower.includes('audio') || urlLower.includes('track');
+          }) || candidates[0];
           matchedUrl = selectedCandidate.url;
           matchedHeaders = selectedCandidate.requestHeaders;
           matchedResponseHeaders = { ...selectedCandidate.responseHeaders, ...matchedResponseHeaders };
           matchedServerIp = selectedCandidate.serverIp;
         } else {
-          let activeMediaUrl = '';
           for (const [, entry] of activeRequests.entries()) {
             if (entry.url && (entry.url.includes('.m3u8') || entry.url.includes('.mpd'))) {
-              activeMediaUrl = entry.url;
+              matchedUrl = entry.url;
               break;
             }
           }
-          if (activeMediaUrl) {
-            matchedUrl = activeMediaUrl;
-          } else if (lastCapturedMediaUrl && Date.now() - lastCapturedTimestamp < 15000) {
+          if (!matchedUrl && lastCapturedMediaUrl && Date.now() - lastCapturedTimestamp < 15000) {
             matchedUrl = lastCapturedMediaUrl;
           }
         }
@@ -339,8 +344,20 @@ export default defineBackground(() => {
         timestamp: Date.now(),
         manifestContent: message.content
       };
-      
       sendPayload(payload);
+    }
+
+    if (message.action === 'keyIntercepted') {
+      const pageUrl = sender.tab?.url || '';
+      const pageTitle = sender.tab?.title || '';
+      const keyPayload: KeyPayload = {
+        key: message.key,
+        href: message.href || pageUrl,
+        pageUrl,
+        pageTitle,
+        timestamp: Date.now(),
+      };
+      sendKeyPayload(keyPayload);
     }
   });
 
