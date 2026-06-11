@@ -3053,6 +3053,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "url",
  "wreq",
  "wreq-util",
 ]
@@ -4267,6 +4268,7 @@ dependencies = [
  "tokio",
  "tokio-btls",
  "tower",
+ "tower-http",
  "url",
  "webpki-root-certs",
  "wreq-proto",

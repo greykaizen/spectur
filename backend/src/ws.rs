@@ -33,8 +33,18 @@ async fn handle_connection(
                 if let tokio_tungstenite::tungstenite::Message::Text(text) = msg {
                     match serde_json::from_str::<StreamPayload>(&text) {
                         Ok(payload) => {
+                            let url = payload.url.clone();
+                            let headers = payload.request_headers.clone();
+
                             let mut app = state.lock().await;
-                            app.add_stream(payload);
+                            let (tab_idx, exists) = app.add_stream(payload);
+
+                            if !exists {
+                                let analyzer_state = Arc::clone(&state);
+                                tokio::spawn(async move {
+                                    crate::analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers).await;
+                                });
+                            }
                         }
                         Err(e) => {
                             let mut app = state.lock().await;

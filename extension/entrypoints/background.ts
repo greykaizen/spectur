@@ -14,13 +14,15 @@ interface StreamPayload {
 
 export default defineBackground(() => {
   const WS_URL = 'ws://127.0.0.1:8080';
-  const MEDIA_EXTENSIONS = /\.(m3u8|mpd|m4s|ts|mp4)(\?|$)/i;
+  const MEDIA_EXTENSIONS = /\.(m3u8|mpd|mp4|m4a|m4v|webm|mov)(\?|$)/i;
   const MEDIA_MIME_TYPES = [
     'application/vnd.apple.mpegurl',
     'application/x-mpegURL',
     'application/dash+xml',
-    'video/mp2t',
     'video/mp4',
+    'video/webm',
+    'audio/mp4',
+    'audio/mpeg',
   ];
 
   const activeRequests = new Map<string, Partial<StreamPayload>>();

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -7,8 +8,9 @@ pub async fn analyze_manifest(
     state: Arc<Mutex<AppState>>,
     tab_idx: usize,
     url: String,
+    headers: HashMap<String, String>,
 ) {
-    let metadata = match detect_and_fetch(&url).await {
+    let metadata = match detect_and_fetch(&url, headers).await {
         Ok(m) => m,
         Err(e) => {
             let mut app = state.lock().await;
@@ -21,23 +23,76 @@ pub async fn analyze_manifest(
     app.set_stream_metadata(tab_idx, &url, metadata);
 }
 
-async fn detect_and_fetch(url: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
+async fn detect_and_fetch(
+    url: &str,
+    headers: HashMap<String, String>,
+) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
     if url.contains(".m3u8") {
-        parse_hls(url).await
+        parse_hls(url, headers).await
     } else if url.contains(".mpd") {
-        parse_dash(url).await
+        parse_dash(url, headers).await
     } else {
         Err("unsupported manifest format".into())
     }
 }
 
-async fn parse_hls(url: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
+async fn fetch_with_redirects(
+    client: &wreq::Client,
+    initial_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    let mut current_url = initial_url.to_string();
+    let mut redirects_followed = 0;
+    const MAX_REDIRECTS: usize = 10;
+
+    loop {
+        let mut req = client.get(&current_url);
+        for (k, v) in headers {
+            let k_lower = k.to_lowercase();
+            if k_lower == "host" || k_lower == "accept-encoding" || k_lower == "content-length" || k_lower == "connection" {
+                continue;
+            }
+            if let (Ok(name), Ok(value)) = (wreq::header::HeaderName::from_bytes(k.as_bytes()), wreq::header::HeaderValue::from_str(&v)) {
+                req = req.header(name, value);
+            }
+        }
+
+        let resp = req.send().await?;
+        let status = resp.status();
+
+        if status.is_redirection() {
+            if redirects_followed >= MAX_REDIRECTS {
+                return Err("too many redirects".into());
+            }
+            if let Some(loc_val) = resp.headers().get("location") {
+                let loc_str = loc_val.to_str()?;
+                let base = url::Url::parse(&current_url)?;
+                let next_url = base.join(loc_str)?;
+                current_url = next_url.to_string();
+                redirects_followed += 1;
+                continue;
+            }
+        }
+
+        if !status.is_success() {
+            return Err(format!("HTTP error status: {}", status).into());
+        }
+
+        let body = resp.text().await?;
+        return Ok(body);
+    }
+}
+
+async fn parse_hls(
+    url: &str,
+    headers: HashMap<String, String>,
+) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
     let client = wreq::Client::builder()
         .emulation(wreq_util::Emulation::Firefox136)
+        .redirect(wreq::redirect::Policy::none())
         .build()?;
 
-    let resp = client.get(url).send().await?;
-    let body = resp.text().await?;
+    let body = fetch_with_redirects(&client, url, &headers).await?;
 
     let (_, playlist) = m3u8_rs::parse_playlist(body.as_bytes())
         .map_err(|e| format!("m3u8 parse error: {:?}", e))?;
@@ -84,13 +139,16 @@ async fn parse_hls(url: &str) -> Result<StreamMetadata, Box<dyn std::error::Erro
     }
 }
 
-async fn parse_dash(url: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
+async fn parse_dash(
+    url: &str,
+    headers: HashMap<String, String>,
+) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
     let client = wreq::Client::builder()
         .emulation(wreq_util::Emulation::Firefox136)
+        .redirect(wreq::redirect::Policy::none())
         .build()?;
 
-    let resp = client.get(url).send().await?;
-    let body = resp.text().await?;
+    let body = fetch_with_redirects(&client, url, &headers).await?;
 
     let mpd = dash_mpd::parse(&body)
         .map_err(|e| format!("MPD parse error: {:?}", e))?;

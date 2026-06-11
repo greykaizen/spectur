@@ -155,15 +155,27 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
             if !meta.resolutions.is_empty() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Resolutions:", Style::default().fg(Color::Cyan)),
+                    Span::styled("Resolutions (Use Tab to select):", Style::default().fg(Color::Cyan)),
                 ]));
-                for res in &meta.resolutions {
+                for (i, res) in meta.resolutions.iter().enumerate() {
                     let bw_str = if res.bandwidth > 0 {
                         format!(" ({} kbps)", res.bandwidth / 1000)
                     } else {
                         String::new()
                     };
-                    lines.push(Line::from(format!("  * {}{}", res.label, bw_str)));
+                    let prefix = if i == state.selected_resolution_index && state.focused_panel == Panel::Metadata {
+                        " > "
+                    } else {
+                        "   "
+                    };
+                    let style = if i == state.selected_resolution_index && state.focused_panel == Panel::Metadata {
+                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+                    lines.push(Line::from(vec![
+                        Span::styled(format!("{}{}{}", prefix, res.label, bw_str), style)
+                    ]));
                 }
             }
 
@@ -204,7 +216,15 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let paragraph = Paragraph::new(content)
-        .block(Block::bordered().title(" Metadata "))
+        .block(
+            Block::bordered()
+                .title(" Metadata ")
+                .border_style(if state.focused_panel == Panel::Metadata {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default()
+                }),
+        )
         .wrap(Wrap { trim: false });
 
     frame.render_widget(paragraph, area);
@@ -317,18 +337,23 @@ pub fn handle_events(state: &mut AppState) -> std::io::Result<Action> {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(Action::Quit),
             KeyCode::Tab => {
                 state.focused_panel = match state.focused_panel {
-                    Panel::Streams => Panel::Downloads,
+                    Panel::Streams => Panel::Metadata,
+                    Panel::Metadata => Panel::Downloads,
                     Panel::Downloads => Panel::Streams,
                 };
             }
             KeyCode::Up => {
                 if state.focused_panel == Panel::Streams {
                     state.prev_stream();
+                } else if state.focused_panel == Panel::Metadata {
+                    state.prev_resolution();
                 }
             }
             KeyCode::Down => {
                 if state.focused_panel == Panel::Streams {
                     state.next_stream();
+                } else if state.focused_panel == Panel::Metadata {
+                    state.next_resolution();
                 }
             }
             KeyCode::Left => {

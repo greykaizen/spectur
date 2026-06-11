@@ -4,7 +4,6 @@ mod types;
 mod ui;
 mod ws;
 
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -23,7 +22,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let mut terminal = ratatui::init();
-    let mut analyzed_urls: HashSet<String> = HashSet::new();
 
     loop {
         let action;
@@ -38,20 +36,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let selection = {
                     let app = state.lock().await;
                     let stream = app.selected_stream();
-                    stream.map(|s| (app.selected_tab_index, s.url.clone()))
+                    stream.map(|s| {
+                        let resolution = s.metadata.as_ref().and_then(|meta| {
+                            meta.resolutions.get(app.selected_resolution_index).map(|res| res.label.clone())
+                        });
+                        (
+                            app.selected_tab_index,
+                            s.url.clone(),
+                            s.request_headers.clone(),
+                            s.metadata.is_some(),
+                            resolution,
+                        )
+                    })
                 };
 
-                if let Some((tab_idx, url)) = selection {
-                    if !analyzed_urls.contains(&url) {
-                        analyzed_urls.insert(url.clone());
-                        let analyzer_state = Arc::clone(&state);
-                        tokio::spawn(async move {
-                            analyzer::analyze_manifest(analyzer_state, tab_idx, url).await;
-                        });
-                    } else {
+                if let Some((tab_idx, url, headers, has_metadata, resolution)) = selection {
+                    if has_metadata {
                         let download_state = Arc::clone(&state);
                         tokio::spawn(async move {
-                            spawner::spawn_download(download_state, url).await;
+                            spawner::spawn_download(download_state, url, resolution).await;
+                        });
+                    } else {
+                        let analyzer_state = Arc::clone(&state);
+                        tokio::spawn(async move {
+                            analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers).await;
                         });
                     }
                 }

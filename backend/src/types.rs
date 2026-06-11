@@ -23,6 +23,7 @@ pub struct StreamPayload {
 pub struct AppState {
     pub selected_tab_index: usize,
     pub selected_stream_index: usize,
+    pub selected_resolution_index: usize,
     pub tabs: Vec<TabSession>,
     pub downloads: Vec<DownloadTask>,
     pub tui_logs: Vec<String>,
@@ -91,6 +92,7 @@ pub enum DownloadStatus {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Panel {
     Streams,
+    Metadata,
     Downloads,
 }
 
@@ -99,6 +101,7 @@ impl AppState {
         Self {
             selected_tab_index: 0,
             selected_stream_index: 0,
+            selected_resolution_index: 0,
             tabs: Vec::new(),
             downloads: Vec::new(),
             tui_logs: Vec::new(),
@@ -106,27 +109,31 @@ impl AppState {
         }
     }
 
-    pub fn add_stream(&mut self, payload: StreamPayload) {
-        let format = detect_format(&payload.url);
+    pub fn add_stream(&mut self, payload: StreamPayload) -> (usize, bool) {
+        let format = detect_format(&payload.url, &payload.response_headers);
         let captured = CapturedStream {
             url: payload.url.clone(),
             method: payload.method,
-            request_headers: payload.request_headers,
+            request_headers: payload.request_headers.clone(),
             server_ip: payload.server_ip,
             format,
             metadata: None,
         };
 
-        let tab = self
+        let tab_pos = self
             .tabs
-            .iter_mut()
-            .find(|t| t.page_url == payload.page_url);
+            .iter()
+            .position(|t| t.page_url == payload.page_url);
 
-        if let Some(tab) = tab {
-            if !tab.streams.iter().any(|s| s.url == captured.url) {
+        if let Some(idx) = tab_pos {
+            let tab = &mut self.tabs[idx];
+            let exists = tab.streams.iter().any(|s| s.url == captured.url);
+            if !exists {
                 tab.streams.push(captured);
             }
+            (idx, exists)
         } else {
+            let idx = self.tabs.len();
             self.tabs.push(TabSession {
                 page_url: payload.page_url,
                 page_title: if payload.page_title.is_empty() {
@@ -136,6 +143,7 @@ impl AppState {
                 },
                 streams: vec![captured],
             });
+            (idx, false)
         }
     }
 
@@ -157,6 +165,7 @@ impl AppState {
         if self.tabs.len() > 1 {
             self.selected_tab_index = (self.selected_tab_index + 1) % self.tabs.len();
             self.selected_stream_index = 0;
+            self.selected_resolution_index = 0;
         }
     }
 
@@ -167,6 +176,7 @@ impl AppState {
                 .checked_sub(1)
                 .unwrap_or(self.tabs.len() - 1);
             self.selected_stream_index = 0;
+            self.selected_resolution_index = 0;
         }
     }
 
@@ -176,6 +186,7 @@ impl AppState {
             if tab.streams.len() > 1 {
                 self.selected_stream_index =
                     (self.selected_stream_index + 1) % tab.streams.len();
+                self.selected_resolution_index = 0;
             }
         }
     }
@@ -188,6 +199,31 @@ impl AppState {
                     .selected_stream_index
                     .checked_sub(1)
                     .unwrap_or(tab.streams.len() - 1);
+                self.selected_resolution_index = 0;
+            }
+        }
+    }
+
+    pub fn next_resolution(&mut self) {
+        if let Some(stream) = self.selected_stream() {
+            if let Some(meta) = &stream.metadata {
+                if !meta.resolutions.is_empty() {
+                    self.selected_resolution_index =
+                        (self.selected_resolution_index + 1) % meta.resolutions.len();
+                }
+            }
+        }
+    }
+
+    pub fn prev_resolution(&mut self) {
+        if let Some(stream) = self.selected_stream() {
+            if let Some(meta) = &stream.metadata {
+                if !meta.resolutions.is_empty() {
+                    self.selected_resolution_index = self
+                        .selected_resolution_index
+                        .checked_sub(1)
+                        .unwrap_or(meta.resolutions.len() - 1);
+                }
             }
         }
     }
@@ -201,17 +237,38 @@ impl AppState {
     }
 }
 
-fn detect_format(url: &str) -> StreamFormat {
+fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> StreamFormat {
     let lower = url.to_lowercase();
     if lower.contains(".m3u8") {
-        StreamFormat::Hls
-    } else if lower.contains(".mpd") {
-        StreamFormat::Dash
-    } else if lower.contains(".mp4") {
-        StreamFormat::Mp4
-    } else if lower.contains(".ts") {
-        StreamFormat::Ts
-    } else {
-        StreamFormat::Unknown
+        return StreamFormat::Hls;
     }
+    if lower.contains(".mpd") {
+        return StreamFormat::Dash;
+    }
+    if lower.contains(".mp4") {
+        return StreamFormat::Mp4;
+    }
+    if lower.contains(".ts") {
+        return StreamFormat::Ts;
+    }
+
+    for (k, v) in response_headers {
+        if k.to_lowercase() == "content-type" {
+            let v_lower = v.to_lowercase();
+            if v_lower.contains("mpegurl") {
+                return StreamFormat::Hls;
+            }
+            if v_lower.contains("dash+xml") {
+                return StreamFormat::Dash;
+            }
+            if v_lower.contains("video/mp4") {
+                return StreamFormat::Mp4;
+            }
+            if v_lower.contains("video/mp2t") {
+                return StreamFormat::Ts;
+            }
+        }
+    }
+
+    StreamFormat::Unknown
 }

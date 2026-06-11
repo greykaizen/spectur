@@ -9,6 +9,7 @@ use crate::types::{AppState, DownloadStatus};
 pub async fn spawn_download(
     state: Arc<Mutex<AppState>>,
     stream_url: String,
+    resolution: Option<String>,
 ) {
     let output_dir = "/tmp/spectur-downloads";
     let _ = std::fs::create_dir_all(output_dir);
@@ -39,7 +40,7 @@ pub async fn spawn_download(
         app.tui_logs.push(format!("Starting download: {}", stream_url));
     }
 
-    let result = run_downloader(&stream_url, &output_path, state.clone(), task_id).await;
+    let result = run_downloader(&stream_url, &output_path, state.clone(), task_id, resolution).await;
 
     let mut app = state.lock().await;
     if let Some(task) = app.downloads.get_mut(task_id) {
@@ -63,9 +64,10 @@ async fn run_downloader(
     output_path: &str,
     state: Arc<Mutex<AppState>>,
     task_id: usize,
+    resolution: Option<String>,
 ) -> Result<(), String> {
     let tool = select_downloader(url);
-    let args = build_args(&tool, url, output_path);
+    let args = build_args(&tool, url, output_path, resolution);
 
     let mut child = Command::new(&tool.binary)
         .args(&args)
@@ -141,19 +143,24 @@ fn select_downloader(url: &str) -> Downloader {
     }
 }
 
-fn build_args(tool: &Downloader, url: &str, output_path: &str) -> Vec<String> {
+fn build_args(tool: &Downloader, url: &str, output_path: &str, resolution: Option<String>) -> Vec<String> {
     match tool.binary {
         "N_m3u8DL-RE" => {
             let path = std::path::Path::new(output_path);
             let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("/tmp/spectur-downloads");
             let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("download");
-            vec![
+            let mut args = vec![
                 url.to_string(),
                 "--save-dir".into(),
                 parent.to_string(),
                 "--save-name".into(),
                 file_stem.to_string(),
-            ]
+            ];
+            if let Some(res) = resolution {
+                args.push("-sv".into());
+                args.push(format!("res={}", res));
+            }
+            args
         }
         "aria2c" => vec![
             url.to_string(),
