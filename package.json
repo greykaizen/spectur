@@ -1,0 +1,10 @@
+{
+  "name": "spectur-root",
+  "private": true,
+  "scripts": {
+    "dev:firefox": "npm --prefix extension run dev:firefox",
+    "dev": "npm --prefix extension run dev",
+    "build": "npm --prefix extension run build",
+    "compile": "npm --prefix extension run compile"
+  }
+}

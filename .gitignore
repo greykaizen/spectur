@@ -1,0 +1,10 @@
+references/
+**/target/
+**/node_modules/
+**/.wxt/
+**/downloads/
+plan/
+**/.output/
+**/package-lock.json
+notes/
+.env
