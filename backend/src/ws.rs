@@ -35,6 +35,7 @@ async fn handle_connection(
                         Ok(payload) => {
                             let url = payload.url.clone();
                             let headers = payload.request_headers.clone();
+                            let manifest_content = payload.manifest_content.clone();
 
                             let mut app = state.lock().await;
                             let (tab_idx, exists) = app.add_stream(payload);
@@ -42,7 +43,7 @@ async fn handle_connection(
                             if !exists {
                                 let analyzer_state = Arc::clone(&state);
                                 tokio::spawn(async move {
-                                    crate::analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers).await;
+                                    crate::analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
                                 });
                             }
                         }

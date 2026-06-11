@@ -6,13 +6,14 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, List, ListItem, Paragraph, Wrap};
 use std::time::Duration;
 
-use crate::types::{AppState, DownloadStatus, Panel, StreamFormat};
+use crate::types::{AppState, DownloadStatus, Panel, StreamFormat, ProbeState};
 
 #[derive(PartialEq)]
 pub enum Action {
     None,
     Quit,
     Enter,
+    Copy,
 }
 
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -126,86 +127,106 @@ fn render_stream_list(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
     let content = if let Some(stream) = state.selected_stream() {
-        if let Some(meta) = &stream.metadata {
-            let mut lines = vec![
-                Line::from(vec![
-                    Span::raw("Format: "),
-                    Span::styled(
-                        match stream.format {
-                            StreamFormat::Hls => "HLS Manifest",
-                            StreamFormat::Dash => "DASH MPD",
-                            _ => "Unknown",
-                        },
-                        Style::default().fg(Color::Yellow),
-                    ),
-                ]),
-                Line::from(""),
-            ];
+        match &stream.probe_state {
+            ProbeState::Done(meta) => {
+                let mut lines = vec![
+                    Line::from(vec![
+                        Span::raw("Format: "),
+                        Span::styled(
+                            match stream.format {
+                                StreamFormat::Hls => "HLS Manifest",
+                                StreamFormat::Dash => "DASH MPD",
+                                StreamFormat::Mp4 => "MP4 Progressive",
+                                StreamFormat::Ts => "TS Segment",
+                                StreamFormat::Unknown => "Unknown",
+                            },
+                            Style::default().fg(Color::Yellow),
+                        ),
+                    ]),
+                    Line::from(""),
+                ];
 
-            if meta.duration_seconds > 0.0 {
-                let mins = (meta.duration_seconds / 60.0) as u32;
-                let secs = (meta.duration_seconds % 60.0) as u32;
-                lines.push(Line::from(format!("Duration: {:02}:{:02}", mins, secs)));
-            }
+                if meta.duration_seconds > 0.0 {
+                    let mins = (meta.duration_seconds / 60.0) as u32;
+                    let secs = (meta.duration_seconds % 60.0) as u32;
+                    lines.push(Line::from(format!("Duration: {:02}:{:02}", mins, secs)));
+                }
 
-            if meta.total_segments > 0 {
-                lines.push(Line::from(format!("Total Segments: {}", meta.total_segments)));
-            }
+                if meta.total_segments > 1 {
+                    lines.push(Line::from(format!("Total Segments: {}", meta.total_segments)));
+                }
 
-            if !meta.resolutions.is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![
-                    Span::styled("Resolutions (Use Tab to select):", Style::default().fg(Color::Cyan)),
-                ]));
-                for (i, res) in meta.resolutions.iter().enumerate() {
-                    let bw_str = if res.bandwidth > 0 {
-                        format!(" ({} kbps)", res.bandwidth / 1000)
-                    } else {
-                        String::new()
-                    };
-                    let prefix = if i == state.selected_resolution_index && state.focused_panel == Panel::Metadata {
-                        " > "
-                    } else {
-                        "   "
-                    };
-                    let style = if i == state.selected_resolution_index && state.focused_panel == Panel::Metadata {
-                        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default()
-                    };
+                if !meta.resolutions.is_empty() {
+                    lines.push(Line::from(""));
                     lines.push(Line::from(vec![
-                        Span::styled(format!("{}{}{}", prefix, res.label, bw_str), style)
+                        Span::styled("Resolutions (Use Tab to select):", Style::default().fg(Color::Cyan)),
                     ]));
+                    for (i, res) in meta.resolutions.iter().enumerate() {
+                        let bw_str = if res.bandwidth > 0 {
+                            format!(" ({} kbps)", res.bandwidth / 1000)
+                        } else {
+                            String::new()
+                        };
+                        let prefix = if i == state.selected_resolution_index && state.focused_panel == Panel::Metadata {
+                            " > "
+                        } else {
+                            "   "
+                        };
+                        let style = if i == state.selected_resolution_index && state.focused_panel == Panel::Metadata {
+                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default()
+                        };
+                        lines.push(Line::from(vec![
+                            Span::styled(format!("{}{}{}", prefix, res.label, bw_str), style)
+                        ]));
+                    }
                 }
-            }
 
-            if !meta.audio_tracks.is_empty() {
+                if !meta.audio_tracks.is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(vec![
+                        Span::styled("Audio Tracks:", Style::default().fg(Color::Cyan)),
+                    ]));
+                    for (i, track) in meta.audio_tracks.iter().enumerate() {
+                        lines.push(Line::from(format!("  [Audio {:02}] {}", i + 1, track)));
+                    }
+                }
+
                 lines.push(Line::from(""));
                 lines.push(Line::from(vec![
-                    Span::styled("Audio Tracks:", Style::default().fg(Color::Cyan)),
+                    Span::styled("[ Press Enter to download ]", Style::default().fg(Color::Green)),
                 ]));
-                for (i, track) in meta.audio_tracks.iter().enumerate() {
-                    lines.push(Line::from(format!("  [Audio {:02}] {}", i + 1, track)));
-                }
+
+                Text::from(lines)
             }
-
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![
-                Span::styled("[ Press Enter to download ]", Style::default().fg(Color::Green)),
-            ]));
-
-            Text::from(lines)
-        } else {
-            Text::from(vec![
-                Line::from(vec![
-                    Span::raw("URL: "),
-                    Span::styled(&stream.url, Style::default().fg(Color::Blue)),
-                ]),
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled("Probing manifest...", Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)),
-                ]),
-            ])
+            ProbeState::Probing => {
+                Text::from(vec![
+                    Line::from(vec![
+                        Span::raw("URL: "),
+                        Span::styled(&stream.url, Style::default().fg(Color::Blue)),
+                    ]),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("Probing manifest...", Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)),
+                    ]),
+                ])
+            }
+            ProbeState::Failed(err) => {
+                Text::from(vec![
+                    Line::from(vec![
+                        Span::raw("URL: "),
+                        Span::styled(&stream.url, Style::default().fg(Color::Blue)),
+                    ]),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("Probe failed:", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(err, Style::default().fg(Color::Red)),
+                    ]),
+                ])
+            }
         }
     } else {
         Text::from(vec![
@@ -367,6 +388,7 @@ pub fn handle_events(state: &mut AppState) -> std::io::Result<Action> {
                 }
             }
             KeyCode::Enter => return Ok(Action::Enter),
+            KeyCode::Char('c') | KeyCode::Char('C') => return Ok(Action::Copy),
             _ => {}
         },
         _ => {}

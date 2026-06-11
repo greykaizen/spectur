@@ -37,20 +37,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let app = state.lock().await;
                     let stream = app.selected_stream();
                     stream.map(|s| {
-                        let resolution = s.metadata.as_ref().and_then(|meta| {
-                            meta.resolutions.get(app.selected_resolution_index).map(|res| res.label.clone())
-                        });
+                        let (has_metadata, resolution) = match &s.probe_state {
+                            crate::types::ProbeState::Done(meta) => {
+                                let res = meta.resolutions.get(app.selected_resolution_index).map(|res| res.label.clone());
+                                (true, res)
+                            }
+                            _ => (false, None),
+                        };
                         (
                             app.selected_tab_index,
                             s.url.clone(),
                             s.request_headers.clone(),
-                            s.metadata.is_some(),
+                            has_metadata,
                             resolution,
+                            s.manifest_content.clone(),
                         )
                     })
                 };
 
-                if let Some((tab_idx, url, headers, has_metadata, resolution)) = selection {
+                if let Some((tab_idx, url, headers, has_metadata, resolution, manifest_content)) = selection {
                     if has_metadata {
                         let download_state = Arc::clone(&state);
                         tokio::spawn(async move {
@@ -59,8 +64,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         let analyzer_state = Arc::clone(&state);
                         tokio::spawn(async move {
-                            analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers).await;
+                            analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
                         });
+                    }
+                }
+            }
+            Action::Copy => {
+                let text_to_copy = {
+                    let app = state.lock().await;
+                    match app.focused_panel {
+                        crate::types::Panel::Metadata => {
+                            app.selected_stream().map(|s| format_metadata_for_copy(s, app.selected_resolution_index))
+                        }
+                        crate::types::Panel::Downloads => {
+                            Some(format_logs_for_copy(&app.tui_logs))
+                        }
+                        _ => None,
+                    }
+                };
+
+                if let Some(text) = text_to_copy {
+                    let copy_res = match arboard::Clipboard::new() {
+                        Ok(mut cb) => match cb.set_text(text) {
+                            Ok(()) => Ok(()),
+                            Err(e) => Err(e.to_string()),
+                        },
+                        Err(e) => Err(e.to_string()),
+                    };
+
+                    let mut app = state.lock().await;
+                    match copy_res {
+                        Ok(()) => {
+                            app.tui_logs.push("Copied selection to system clipboard successfully!".to_string());
+                        }
+                        Err(e) => {
+                            app.tui_logs.push(format!("Failed to copy to clipboard: {}", e));
+                        }
                     }
                 }
             }
@@ -82,4 +121,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ws_handle.abort();
 
     Ok(())
+}
+
+fn format_metadata_for_copy(stream: &crate::types::CapturedStream, selected_resolution_index: usize) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("URL: {}\n", stream.url));
+    s.push_str(&format!("Method: {}\n", stream.method));
+    s.push_str(&format!("Format: {:?}\n", stream.format));
+    s.push_str(&format!("Server IP: {}\n", stream.server_ip));
+    s.push_str("Headers:\n");
+    for (k, v) in &stream.request_headers {
+        s.push_str(&format!("  {}: {}\n", k, v));
+    }
+    s.push_str("Probe State: ");
+    match &stream.probe_state {
+        crate::types::ProbeState::Probing => {
+            s.push_str("Probing...\n");
+        }
+        crate::types::ProbeState::Failed(err) => {
+            s.push_str(&format!("Failed: {}\n", err));
+        }
+        crate::types::ProbeState::Done(meta) => {
+            s.push_str("Done\n");
+            s.push_str(&format!("  Duration: {}s\n", meta.duration_seconds));
+            s.push_str(&format!("  Total Segments: {}\n", meta.total_segments));
+            s.push_str("  Resolutions:\n");
+            for (i, r) in meta.resolutions.iter().enumerate() {
+                let prefix = if i == selected_resolution_index { " => " } else { "    " };
+                s.push_str(&format!("{}{} (bandwidth: {})\n", prefix, r.label, r.bandwidth));
+            }
+            s.push_str("  Audio Tracks:\n");
+            for a in &meta.audio_tracks {
+                s.push_str(&format!("    {}\n", a));
+            }
+        }
+    }
+    s
+}
+
+fn format_logs_for_copy(logs: &[String]) -> String {
+    logs.join("\n")
 }

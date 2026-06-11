@@ -17,6 +17,8 @@ pub struct StreamPayload {
     #[serde(rename = "pageTitle")]
     pub page_title: String,
     pub timestamp: u64,
+    #[serde(rename = "manifestContent")]
+    pub manifest_content: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,13 @@ pub struct TabSession {
     pub streams: Vec<CapturedStream>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProbeState {
+    Probing,
+    Done(StreamMetadata),
+    Failed(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct CapturedStream {
     pub url: String,
@@ -44,7 +53,8 @@ pub struct CapturedStream {
     pub request_headers: HashMap<String, String>,
     pub server_ip: String,
     pub format: StreamFormat,
-    pub metadata: Option<StreamMetadata>,
+    pub probe_state: ProbeState,
+    pub manifest_content: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +66,7 @@ pub enum StreamFormat {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StreamMetadata {
     pub duration_seconds: f32,
     pub total_segments: usize,
@@ -64,7 +74,7 @@ pub struct StreamMetadata {
     pub audio_tracks: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResolutionInfo {
     pub label: String,
     pub bandwidth: u64,
@@ -111,15 +121,7 @@ impl AppState {
 
     pub fn add_stream(&mut self, payload: StreamPayload) -> (usize, bool) {
         let format = detect_format(&payload.url, &payload.response_headers);
-        let captured = CapturedStream {
-            url: payload.url.clone(),
-            method: payload.method,
-            request_headers: payload.request_headers.clone(),
-            server_ip: payload.server_ip,
-            format,
-            metadata: None,
-        };
-
+        
         let tab_pos = self
             .tabs
             .iter()
@@ -127,12 +129,57 @@ impl AppState {
 
         if let Some(idx) = tab_pos {
             let tab = &mut self.tabs[idx];
-            let exists = tab.streams.iter().any(|s| s.url == captured.url);
-            if !exists {
+            if let Some(existing) = tab.streams.iter_mut().find(|s| {
+                if s.url == payload.url {
+                    return true;
+                }
+                if s.format == StreamFormat::Mp4 && format == StreamFormat::Mp4 {
+                    if let (Ok(u1), Ok(u2)) = (url::Url::parse(&s.url), url::Url::parse(&payload.url)) {
+                        if u1.path() == u2.path() && u1.host() == u2.host() {
+                            return true;
+                        }
+                    }
+                }
+                false
+            }) {
+                let should_analyze = if payload.manifest_content.is_some() {
+                    match &existing.probe_state {
+                        ProbeState::Done(_) => false,
+                        _ => {
+                            existing.manifest_content = payload.manifest_content.clone();
+                            existing.probe_state = ProbeState::Probing;
+                            true
+                        }
+                    }
+                } else {
+                    false
+                };
+                existing.url = payload.url;
+                existing.request_headers = payload.request_headers;
+                (idx, !should_analyze)
+            } else {
+                let captured = CapturedStream {
+                    url: payload.url.clone(),
+                    method: payload.method,
+                    request_headers: payload.request_headers.clone(),
+                    server_ip: payload.server_ip,
+                    format,
+                    probe_state: ProbeState::Probing,
+                    manifest_content: payload.manifest_content.clone(),
+                };
                 tab.streams.push(captured);
+                (idx, false)
             }
-            (idx, exists)
         } else {
+            let captured = CapturedStream {
+                url: payload.url.clone(),
+                method: payload.method,
+                request_headers: payload.request_headers.clone(),
+                server_ip: payload.server_ip,
+                format,
+                probe_state: ProbeState::Probing,
+                manifest_content: payload.manifest_content.clone(),
+            };
             let idx = self.tabs.len();
             self.tabs.push(TabSession {
                 page_url: payload.page_url,
@@ -206,7 +253,7 @@ impl AppState {
 
     pub fn next_resolution(&mut self) {
         if let Some(stream) = self.selected_stream() {
-            if let Some(meta) = &stream.metadata {
+            if let ProbeState::Done(meta) = &stream.probe_state {
                 if !meta.resolutions.is_empty() {
                     self.selected_resolution_index =
                         (self.selected_resolution_index + 1) % meta.resolutions.len();
@@ -217,7 +264,7 @@ impl AppState {
 
     pub fn prev_resolution(&mut self) {
         if let Some(stream) = self.selected_stream() {
-            if let Some(meta) = &stream.metadata {
+            if let ProbeState::Done(meta) = &stream.probe_state {
                 if !meta.resolutions.is_empty() {
                     self.selected_resolution_index = self
                         .selected_resolution_index
@@ -228,28 +275,39 @@ impl AppState {
         }
     }
 
-    pub fn set_stream_metadata(&mut self, tab_idx: usize, url: &str, metadata: StreamMetadata) {
+    pub fn set_stream_probe_done(&mut self, tab_idx: usize, url: &str, metadata: StreamMetadata, format: StreamFormat) {
         if let Some(tab) = self.tabs.get_mut(tab_idx) {
             if let Some(stream) = tab.streams.iter_mut().find(|s| s.url == url) {
-                stream.metadata = Some(metadata);
+                stream.probe_state = ProbeState::Done(metadata);
+                stream.format = format;
+            }
+        }
+    }
+
+    pub fn set_stream_probe_failed(&mut self, tab_idx: usize, url: &str, error: String) {
+        if let Some(tab) = self.tabs.get_mut(tab_idx) {
+            if let Some(stream) = tab.streams.iter_mut().find(|s| s.url == url) {
+                stream.probe_state = ProbeState::Failed(error);
             }
         }
     }
 }
 
 fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> StreamFormat {
-    let lower = url.to_lowercase();
-    if lower.contains(".m3u8") {
-        return StreamFormat::Hls;
-    }
-    if lower.contains(".mpd") {
-        return StreamFormat::Dash;
-    }
-    if lower.contains(".mp4") {
-        return StreamFormat::Mp4;
-    }
-    if lower.contains(".ts") {
-        return StreamFormat::Ts;
+    if let Ok(parsed) = url::Url::parse(url) {
+        let path = parsed.path().to_lowercase();
+        if path.contains(".m3u8") {
+            return StreamFormat::Hls;
+        }
+        if path.contains(".mpd") {
+            return StreamFormat::Dash;
+        }
+        if path.contains(".mp4") {
+            return StreamFormat::Mp4;
+        }
+        if path.contains(".ts") {
+            return StreamFormat::Ts;
+        }
     }
 
     for (k, v) in response_headers {

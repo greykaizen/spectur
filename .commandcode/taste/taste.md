@@ -11,6 +11,7 @@
 # rust-backend
 - Download tool priority: use aria2c/ffmpeg/N_m3u8DL-RE as primary downloaders, not yt-dlp. yt-dlp is only for specific known platform sites much later. Confidence: 0.75
 - Parse manifest files (.m3u8/.mpd) to extract media segment URLs before downloading — never download the playlist file itself as if it were the media. The backend must fetch + parse the manifest, select the best quality track, then download the actual media segments. Confidence: 0.80
+- During manifest parsing, extract encryption key metadata: EXT-X-KEY URLs and attributes for HLS manifests, ContentProtection/pssh elements for DASH manifests — pass this encryption context to the downloader so it can handle DRM-protected streams. Confidence: 0.70
 
 # testing
 - Compare detection results against cat-catch on test sites — our popup must show detected manifests at least as visibly as cat-catch does (master.m3u8, index.m3u8, etc.). Confidence: 0.70
