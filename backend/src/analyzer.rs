@@ -662,6 +662,8 @@ async fn probe_format_and_parse(
         let base_url = extract_base_url(url);
         if let Ok(meta) = parse_hls_content(&body, &base_url) {
             Ok((meta, StreamFormat::Hls))
+        } else if let Ok(meta) = parse_dash_content(&body, &base_url) {
+            Ok((meta, StreamFormat::Dash))
         } else {
             Err("unknown format or unsupported media".into())
         }
