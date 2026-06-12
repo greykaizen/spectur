@@ -309,7 +309,8 @@ impl AppState {
         }
     }
 
-    pub fn add_stream(&mut self, payload: StreamPayload) -> (usize, bool) {
+    pub fn add_stream(&mut self, mut payload: StreamPayload) -> (usize, bool) {
+        payload.url = translate_generic_json_manifest(&payload.url);
         let format = detect_format(&payload.url, &payload.response_headers);
         let dedup = path_dedup(&payload.url);
 
@@ -491,7 +492,7 @@ fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> Strea
         if path.contains(".m3u8") {
             return StreamFormat::Hls;
         }
-        if path.contains(".mpd") {
+        if path.contains(".mpd") || path.contains("master.json") || path.contains("playlist.json") {
             return StreamFormat::Dash;
         }
         if path.contains(".mp4") {
@@ -519,6 +520,46 @@ fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> Strea
         }
     }
     StreamFormat::Unknown
+}
+
+fn translate_generic_json_manifest(url: &str) -> String {
+    if let Ok(mut parsed) = url::Url::parse(url) {
+        let path = parsed.path().to_lowercase();
+        let is_json_manifest = path.contains("master.json") || path.contains("playlist.json");
+        if is_json_manifest {
+            let mut new_path = parsed.path().to_string();
+            if new_path.contains("master.json") {
+                new_path = new_path.replace("master.json", "master.mpd");
+            } else if new_path.contains("playlist.json") {
+                new_path = new_path.replace("playlist.json", "playlist.mpd");
+            }
+            parsed.set_path(&new_path);
+
+            let mut params = Vec::new();
+            let mut has_ranges = false;
+            for (k, v) in parsed.query_pairs() {
+                if k == "base64_init" {
+                    continue; // Strip base64_init parameter to avoid inline blobs
+                }
+                if k == "query_string_ranges" {
+                    has_ranges = true;
+                }
+                params.push((k.into_owned(), v.into_owned()));
+            }
+            if !has_ranges {
+                params.push(("query_string_ranges".to_string(), "1".to_string()));
+            }
+
+            let mut query_str = String::new();
+            for (i, (k, v)) in params.iter().enumerate() {
+                if i > 0 { query_str.push('&'); }
+                query_str.push_str(&format!("{}={}", k, v));
+            }
+            parsed.set_query(Some(&query_str));
+            return parsed.to_string();
+        }
+    }
+    url.to_string()
 }
 
 fn path_dedup(url: &str) -> String {
