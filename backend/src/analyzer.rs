@@ -480,8 +480,8 @@ async fn parse_mp4(
 
     let mut cmd = tokio::process::Command::new("ffprobe");
     cmd.arg("-v").arg("error")
-       .arg("-show_format")
-       .arg("-show_streams")
+       .arg("-show_entries")
+       .arg("format=duration,size,bit_rate:stream=codec_name,codec_type,width,height,r_frame_rate")
        .arg("-of").arg("json");
 
     if !header_str.is_empty() {
