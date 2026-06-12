@@ -150,6 +150,7 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
                         if let Some(ref uri) = key.uri { lines.push(Line::from(format!("  Key URI: {}", uri))); }
                         if let Some(ref iv) = key.iv { lines.push(Line::from(format!("  IV: {}", iv))); }
                         if let Some(ref kf) = key.keyformat { lines.push(Line::from(format!("  Key Format: {}", kf))); }
+                        if let Some(ref hex) = key.key_hex { lines.push(Line::from(format!("  Key Hex: {}", hex))); }
                         lines.push(Line::from(""));
                     }
                 }

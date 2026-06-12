@@ -15,7 +15,21 @@ pub async fn analyze_manifest(
     let result = detect_and_fetch(&url, headers, manifest_content).await;
     let mut app = state.lock().await;
     match result {
-        Ok((metadata, format)) => {
+        Ok((mut metadata, format)) => {
+            // Let's associate any already-intercepted keys for this tab!
+            if let Some(tab) = app.tabs.get(tab_idx) {
+                let page_url = &tab.page_url;
+                let matching_keys: Vec<String> = app.intercepted_keys.iter()
+                    .filter(|k| &k.page_url == page_url)
+                    .map(|k| k.key.iter().map(|b| format!("{:02x}", b)).collect())
+                    .collect();
+                
+                for (i, key_info) in metadata.keys.iter_mut().enumerate() {
+                    if let Some(hex) = matching_keys.get(i).or_else(|| matching_keys.first()) {
+                        key_info.key_hex = Some(hex.clone());
+                    }
+                }
+            }
             app.set_stream_probe_done(tab_idx, &url, metadata, format);
         }
         Err(e) => {
@@ -191,9 +205,12 @@ fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<d
             }
 
             for sess_key in &master.session_key {
+                let absolute_uri = sess_key.0.uri.as_ref().map(|u| {
+                    resolve_segment_base(base_url, u).unwrap_or_else(|| u.clone())
+                });
                 keys.push(KeyInfo {
                     method: format!("{:?}", sess_key.0.method),
-                    uri: sess_key.0.uri.clone(),
+                    uri: absolute_uri,
                     iv: sess_key.0.iv.clone(),
                     keyformat: sess_key.0.keyformat.clone(),
                     key_hex: None,
@@ -223,9 +240,12 @@ fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<d
                 if let Some(key) = &seg.key {
                     let key_id = format!("{:?}:{}", key.method, key.uri.as_deref().unwrap_or(""));
                     if seen_keys.insert(key_id) {
+                        let absolute_uri = key.uri.as_ref().map(|u| {
+                            resolve_segment_base(base_url, u).unwrap_or_else(|| u.clone())
+                        });
                         keys.push(KeyInfo {
                             method: format!("{:?}", key.method),
-                            uri: key.uri.clone(),
+                            uri: absolute_uri,
                             iv: key.iv.clone(),
                             keyformat: key.keyformat.clone(),
                             key_hex: None,
@@ -266,6 +286,45 @@ async fn parse_dash(
     Ok((meta, StreamFormat::Dash))
 }
 
+fn resolve_dash_url(
+    manifest_url: &str,
+    mpd: &dash_mpd::MPD,
+    period: &dash_mpd::Period,
+    adaptation: &dash_mpd::AdaptationSet,
+    representation: &dash_mpd::Representation,
+) -> Option<String> {
+    let mut current = if manifest_url.ends_with(".mpd") || manifest_url.contains('?') || manifest_url.split('/').last().map(|s| s.contains('.')).unwrap_or(false) {
+        extract_base_url(manifest_url)
+    } else {
+        manifest_url.to_string()
+    };
+
+    let mut join_url = |rel: &str| {
+        if rel.starts_with("http://") || rel.starts_with("https://") {
+            current = rel.to_string();
+        } else if let Ok(base) = url::Url::parse(&current) {
+            if let Ok(joined) = base.join(rel) {
+                current = joined.to_string();
+            }
+        }
+    };
+
+    if let Some(bu) = mpd.base_url.first() {
+        join_url(&bu.base);
+    }
+    if let Some(bu) = period.BaseURL.first() {
+        join_url(&bu.base);
+    }
+    if let Some(bu) = adaptation.BaseURL.first() {
+        join_url(&bu.base);
+    }
+    if let Some(bu) = representation.BaseURL.first() {
+        join_url(&bu.base);
+    }
+
+    Some(current)
+}
+
 fn parse_dash_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<dyn std::error::Error + Send + Sync>> {
     let mpd = dash_mpd::parse(body)
         .map_err(|e| format!("MPD parse error: {:?}", e))?;
@@ -296,8 +355,7 @@ fn parse_dash_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<
                     if let (Some(w), Some(h)) = (rep.width, rep.height) {
                         let label = format!("{}x{}", w, h);
                         let bw = rep.bandwidth.unwrap_or(0);
-                        let rep_url = rep.id.clone()
-                            .and_then(|id| resolve_segment_base(base_url, &id));
+                        let rep_url = resolve_dash_url(base_url, &mpd, period, adaptation, rep);
                         if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
                             resolutions.push(ResolutionInfo {
                                 label,

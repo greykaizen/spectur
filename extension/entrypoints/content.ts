@@ -42,15 +42,29 @@ export default defineContentScript({
                 configurable: true,
                 enumerable: true
               });
-              // Also check for ytplayer.config.args.player_response
+              // Check various YouTube configuration locations
               var checkInterval = setInterval(function() {
                 try {
-                  if (window.ytplayer && window.ytplayer.config && window.ytplayer.config.args && window.ytplayer.config.args.player_response) {
-                    var pr = JSON.parse(window.ytplayer.config.args.player_response);
-                    if (pr && pr.streamingData) {
-                      _postYTFormats(pr.streamingData);
+                  var cfg = window.ytplayer && window.ytplayer.config;
+                  if (cfg) {
+                    var prStr = null;
+                    if (cfg.args && cfg.args.player_response) {
+                      prStr = cfg.args.player_response;
+                    } else if (cfg.player_response) {
+                      prStr = cfg.player_response;
+                    } else if (cfg.args && cfg.args.raw_player_response) {
+                      prStr = cfg.args.raw_player_response;
+                    } else if (cfg.args && cfg.args.embedded_player_response) {
+                      prStr = cfg.args.embedded_player_response;
                     }
-                    clearInterval(checkInterval);
+
+                    if (prStr) {
+                      var pr = typeof prStr === 'string' ? JSON.parse(prStr) : prStr;
+                      if (pr && pr.streamingData) {
+                        _postYTFormats(pr.streamingData);
+                        clearInterval(checkInterval);
+                      }
+                    }
                   }
                 } catch(e) {}
               }, 500);
@@ -204,46 +218,54 @@ export default defineContentScript({
           };
 
           // ---- Uint8Array constructor hook ----
-          var _Uint8Array = window.Uint8Array;
-          var _OriginalU8 = _Uint8Array;
-          window.Uint8Array = function(arg) {
-            var instance = new _OriginalU8(arg);
+          var _OriginalU8 = window.Uint8Array;
+          window.Uint8Array = function() {
+            var instance = Reflect.construct(_OriginalU8, arguments);
             if (instance.byteLength === 16) _postKey(Array.from(instance));
             return instance;
           };
           window.Uint8Array.prototype = _OriginalU8.prototype;
+          Object.setPrototypeOf(window.Uint8Array, _OriginalU8);
 
           // ---- Uint8Array.prototype.subarray hook ----
           var _subarray = _OriginalU8.prototype.subarray;
           _OriginalU8.prototype.subarray = function(begin, end) {
-            var result = _subarray.call(this, begin, end);
+            var result = _subarray.apply(this, arguments);
+            if (result.byteLength === 16) _postKey(Array.from(result));
+            return result;
+          };
+
+          // ---- Uint8Array.prototype.slice hook ----
+          var _sliceU8 = _OriginalU8.prototype.slice;
+          _OriginalU8.prototype.slice = function() {
+            var result = _sliceU8.apply(this, arguments);
             if (result.byteLength === 16) _postKey(Array.from(result));
             return result;
           };
 
           // ---- Uint16Array constructor hook ----
-          var _Uint16Array = window.Uint16Array;
-          var _OriginalU16 = _Uint16Array;
-          window.Uint16Array = function(arg) {
-            var instance = new _OriginalU16(arg);
+          var _OriginalU16 = window.Uint16Array;
+          window.Uint16Array = function() {
+            var instance = Reflect.construct(_OriginalU16, arguments);
             if (instance.length === 8) { // 8 x uint16 = 16 bytes
-              _postKey(Array.from(new Uint8Array(instance.buffer, instance.byteOffset, 16)));
+              _postKey(Array.from(new _OriginalU8(instance.buffer, instance.byteOffset, 16)));
             }
             return instance;
           };
           window.Uint16Array.prototype = _OriginalU16.prototype;
+          Object.setPrototypeOf(window.Uint16Array, _OriginalU16);
 
           // ---- Uint32Array constructor hook ----
-          var _Uint32Array = window.Uint32Array;
-          var _OriginalU32 = _Uint32Array;
-          window.Uint32Array = function(arg) {
-            var instance = new _OriginalU32(arg);
+          var _OriginalU32 = window.Uint32Array;
+          window.Uint32Array = function() {
+            var instance = Reflect.construct(_OriginalU32, arguments);
             if (instance.length === 4) { // 4 x uint32 = 16 bytes
-              _postKey(Array.from(new Uint8Array(instance.buffer, instance.byteOffset, 16)));
+              _postKey(Array.from(new _OriginalU8(instance.buffer, instance.byteOffset, 16)));
             }
             return instance;
           };
           window.Uint32Array.prototype = _OriginalU32.prototype;
+          Object.setPrototypeOf(window.Uint32Array, _OriginalU32);
 
           // ---- Array.prototype.slice hook ----
           var _slice = Array.prototype.slice;
@@ -256,15 +278,16 @@ export default defineContentScript({
           };
 
           // ---- DataView hooks ----
-          var _DataView = window.DataView;
-          window.DataView = function(buffer, byteOffset, byteLength) {
-            var dv = new _DataView(buffer, byteOffset, byteLength);
+          var _OriginalDataView = window.DataView;
+          window.DataView = function() {
+            var dv = Reflect.construct(_OriginalDataView, arguments);
             if (dv.byteLength === 16) {
-              _postKey(Array.from(new Uint8Array(buffer, byteOffset || 0, 16)));
+              _postKey(Array.from(new _OriginalU8(dv.buffer, dv.byteOffset, 16)));
             }
             return dv;
           };
-          window.DataView.prototype = _DataView.prototype;
+          window.DataView.prototype = _OriginalDataView.prototype;
+          Object.setPrototypeOf(window.DataView, _OriginalDataView);
         })();
       `;
       (document.head || document.documentElement).appendChild(script);

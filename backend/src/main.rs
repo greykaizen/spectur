@@ -154,6 +154,25 @@ fn format_metadata_for_copy(stream: &crate::types::CapturedStream, selected_reso
             for a in &meta.audio_tracks {
                 s.push_str(&format!("    {}\n", a));
             }
+            if !meta.keys.is_empty() {
+                s.push_str("  Encryption Keys:\n");
+                for key in &meta.keys {
+                    s.push_str(&format!("    Method: {}\n", key.method));
+                    if let Some(ref uri) = key.uri { s.push_str(&format!("    Key URI: {}\n", uri)); }
+                    if let Some(ref iv) = key.iv { s.push_str(&format!("    IV: {}\n", iv)); }
+                    if let Some(ref kf) = key.keyformat { s.push_str(&format!("    Key Format: {}\n", kf)); }
+                    if let Some(ref hex) = key.key_hex { s.push_str(&format!("    Key Hex: {}\n", hex)); }
+                }
+            }
+            if !meta.drm.is_empty() {
+                s.push_str("  DRM Protection:\n");
+                for drm in &meta.drm {
+                    s.push_str(&format!("    System: {}\n", drm.system));
+                    s.push_str(&format!("    Scheme: {}\n", drm.scheme_id_uri));
+                    if let Some(ref kid) = drm.default_kid { s.push_str(&format!("    KID: {}\n", kid)); }
+                    if let Some(ref url) = drm.license_url { s.push_str(&format!("    License: {}\n", url)); }
+                }
+            }
         }
     }
     s

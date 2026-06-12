@@ -40,8 +40,32 @@ async fn handle_connection(
                                         .map(|b| format!("{:02x}", b))
                                         .collect();
                                     let href = key_payload.href.clone();
+                                    let page_url = key_payload.page_url.clone();
                                     app.intercepted_keys.push(key_payload);
                                     app.tui_logs.push(format!("AES-128 key intercepted: {} from {}", key_hex, href));
+
+                                    // Let's associate it with any existing streams in the matching tab
+                                    let matching_keys: Vec<String> = app.intercepted_keys.iter()
+                                        .filter(|k| k.page_url == page_url)
+                                        .map(|k| k.key.iter().map(|b| format!("{:02x}", b)).collect())
+                                        .collect();
+
+                                    let mut association_logs = Vec::new();
+                                    if let Some(tab) = app.tabs.iter_mut().find(|t| t.page_url == page_url) {
+                                        for stream in &mut tab.streams {
+                                            if let crate::types::ProbeState::Done(ref mut meta) = stream.probe_state {
+                                                for (i, key_info) in meta.keys.iter_mut().enumerate() {
+                                                    if let Some(hex) = matching_keys.get(i).or_else(|| matching_keys.first()) {
+                                                        if key_info.key_hex.as_ref() != Some(hex) {
+                                                            key_info.key_hex = Some(hex.clone());
+                                                            association_logs.push(format!("Associated key {} with stream {}", hex, stream.url));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    app.tui_logs.extend(association_logs);
                                 }
                             } else if ws_msg.is_youtube_formats() {
                                 if let Some(data) = &ws_msg.streaming_data {
