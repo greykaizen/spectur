@@ -143,21 +143,29 @@ export default defineContentScript({
             return res;
           };
 
-          // ---- fetch hook ----
+          // ---- fetch hook (HLS/DASH + YouTube player network interception) ----
           var _fetch = window.fetch;
           window.fetch = async function(input, init) {
             var res = await _fetch.apply(this, arguments);
+            var url = typeof input === 'string' ? input : (input && input.url) || '';
             try {
               var clone = res.clone();
-              var url = typeof input === 'string' ? input : (input && input.url) || '';
-              clone.text().then(function(text) {
-                var upper = text.toUpperCase();
-                if (upper.indexOf('#EXTM3U') !== -1) {
-                  _post(url, text, 'm3u8', false);
-                } else if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
-                  _post(url, text, 'mpd', false);
-                }
-              }).catch(function() {});
+              if (url.indexOf('youtubei/v1/player') !== -1) {
+                clone.json().then(function(json) {
+                  if (json && json.streamingData) {
+                    _postYTFormats(json.streamingData);
+                  }
+                }).catch(function() {});
+              } else {
+                clone.text().then(function(text) {
+                  var upper = text.toUpperCase();
+                  if (upper.indexOf('#EXTM3U') !== -1) {
+                    _post(url, text, 'm3u8', false);
+                  } else if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
+                    _post(url, text, 'mpd', false);
+                  }
+                }).catch(function() {});
+              }
             } catch (_) {}
             return res;
           };

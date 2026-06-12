@@ -271,6 +271,34 @@ export default defineBackground(() => {
     { urls: ['<all_urls>'] }
   );
 
+  // Production-grade YouTube format discovery: intercept the actual POST
+  // to /youtubei/v1/player that YouTube's SPA fires on every navigation
+  // (cold load + recommended videos). This is the definitive, authenticated
+  // response — no page-memory hacks, no stale ytInitialPlayerResponse.
+  browser.webRequest.onResponseStarted.addListener(
+    (details) => {
+      if (!details.url.includes('youtubei/v1/player')) return;
+      // For POST requests we can't read the response body from webRequest.
+      // The content script fetch hook handles body extraction in MAIN world.
+      // This listener ensures consistent pageUrl/pageTitle context.
+      const pageUrl = details.originUrl || details.initiator || '';
+      if (ws && ws.readyState === WebSocket.OPEN && pageUrl) {
+        try {
+          ws.send(JSON.stringify({
+            type: 'youtubePlayerRequest',
+            url: details.url,
+            pageUrl,
+            responseHeaders: headersToRecord(details.responseHeaders),
+            requestHeaders: {},
+            timestamp: Date.now()
+          }));
+        } catch (_) {}
+      }
+    },
+    { urls: ['*://*.youtube.com/youtubei/v1/*'] },
+    ['responseHeaders']
+  );
+
   setInterval(() => {
     const now = Date.now();
     for (const [id, entry] of activeRequests.entries()) {
