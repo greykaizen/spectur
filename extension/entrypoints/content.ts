@@ -288,6 +288,124 @@ export default defineContentScript({
           };
           window.DataView.prototype = _OriginalDataView.prototype;
           Object.setPrototypeOf(window.DataView, _OriginalDataView);
+
+          // ---- URL.createObjectURL hook ----
+          var _createObjectURL = URL.createObjectURL;
+          URL.createObjectURL = function(blob) {
+            var url = _createObjectURL.apply(this, arguments);
+            if (blob instanceof Blob) {
+              blob.text().then(function(text) {
+                var upper = text.toUpperCase();
+                if (upper.indexOf('#EXTM3U') !== -1) {
+                  _post(url, text, 'm3u8', false);
+                } else if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
+                  _post(url, text, 'mpd', false);
+                }
+              }).catch(function() {});
+            }
+            return url;
+          };
+
+          // ---- Web Worker message hook ----
+          var _OriginalWorker = window.Worker;
+          window.Worker = function(scriptURL, options) {
+            var worker = new _OriginalWorker(scriptURL, options);
+            try {
+              var _postMessage = worker.postMessage;
+              worker.postMessage = function(message, transfer) {
+                inspectWorkerMessage(message);
+                return _postMessage.apply(this, arguments);
+              };
+              worker.addEventListener('message', function(event) {
+                if (event.data) {
+                  inspectWorkerMessage(event.data);
+                }
+              });
+            } catch(e) {}
+            return worker;
+          };
+          window.Worker.prototype = _OriginalWorker.prototype;
+          Object.setPrototypeOf(window.Worker, _OriginalWorker);
+
+          function inspectWorkerMessage(msg) {
+            try {
+              if (typeof msg === 'string') {
+                var upper = msg.toUpperCase();
+                if (upper.indexOf('#EXTM3U') !== -1) {
+                  _post(window.location.href, msg, 'm3u8', true);
+                } else if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
+                  _post(window.location.href, msg, 'mpd', true);
+                }
+              } else if (msg && typeof msg === 'object') {
+                var buf = msg.buffer || msg;
+                if (buf instanceof ArrayBuffer && buf.byteLength === 16) {
+                  _postKey(Array.from(new Uint8Array(buf)));
+                } else if (msg.length === 16 && msg.every && msg.every(function(x) { return typeof x === 'number' && x <= 255; })) {
+                  _postKey(msg);
+                }
+                for (var key in msg) {
+                  if (msg.hasOwnProperty(key)) {
+                    var val = msg[key];
+                    if (typeof val === 'string') {
+                      var upperVal = val.toUpperCase();
+                      if (upperVal.indexOf('#EXTM3U') !== -1) {
+                        _post(window.location.href, val, 'm3u8', true);
+                      } else if (upperVal.indexOf('<MPD') !== -1 && upperVal.indexOf('</MPD>') !== -1) {
+                        _post(window.location.href, val, 'mpd', true);
+                      }
+                    }
+                  }
+                }
+              }
+            } catch(e) {}
+          }
+
+          // ---- Hls constructor hook ----
+          if (window.Hls) {
+            hookHls(window.Hls);
+          } else {
+            var _Hls = undefined;
+            Object.defineProperty(window, 'Hls', {
+              get: function() { return _Hls; },
+              set: function(v) {
+                _Hls = v;
+                if (v) hookHls(v);
+              },
+              configurable: true,
+              enumerable: true
+            });
+          }
+
+          function hookHls(HlsConstructor) {
+            if (HlsConstructor._specturHooked) return;
+            HlsConstructor._specturHooked = true;
+            
+            var _OriginalHls = HlsConstructor;
+            var WrappedHls = function() {
+              var instance = Reflect.construct(_OriginalHls, arguments);
+              try {
+                if (instance.on) {
+                  instance.on('hlsManifestLoaded', function(event, data) {
+                    if (data && data.content) {
+                      _post(data.url || window.location.href, data.content, 'm3u8', false);
+                    }
+                  });
+                  instance.on('hlsLevelLoaded', function(event, data) {
+                    if (data && data.details && data.details.rawPlaylist) {
+                      _post(data.details.url || window.location.href, data.details.rawPlaylist, 'm3u8', false);
+                    }
+                  });
+                }
+              } catch(e) {}
+              return instance;
+            };
+            WrappedHls.prototype = _OriginalHls.prototype;
+            Object.setPrototypeOf(WrappedHls, _OriginalHls);
+            
+            try {
+              window.Hls = WrappedHls;
+            } catch(e) {}
+          }
         })();
       `;
       (document.head || document.documentElement).appendChild(script);

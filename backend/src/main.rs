@@ -35,6 +35,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Action::Enter => {
                 let selection = {
                     let app = state.lock().await;
+                    // YT format download: use yt-dlp with itag directly
+                    if !app.yt_formats.is_empty() && app.focused_panel == crate::types::Panel::Metadata {
+                        let yt_fmt = app.yt_formats.get(app.selected_yt_format_index).cloned();
+                        let yt_url = app.yt_page_url.clone();
+                        drop(app);
+                        if let (Some(fmt), Some(url)) = (yt_fmt, yt_url) {
+                            let download_state = Arc::clone(&state);
+                            tokio::spawn(async move {
+                                spawner::spawn_yt_format_download(download_state, url, fmt).await;
+                            });
+                        }
+                        continue;
+                    }
+
                     let stream = app.selected_stream();
                     stream.map(|s| {
                         let (has_metadata, resolution) = match &s.probe_state {
@@ -101,6 +115,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.tui_logs.push(format!("Failed to copy to clipboard: {}", e));
                         }
                     }
+                }
+            }
+            Action::ToggleNoise => {
+                let mut app = state.lock().await;
+                let tab_idx = app.selected_tab_index;
+                if tab_idx < app.tabs.len() {
+                    let tab = &mut app.tabs[tab_idx];
+                    tab.show_noise = !tab.show_noise;
+                    let status_str = if tab.show_noise { "showing segments" } else { "hiding segments" };
+                    app.selected_stream_index = 0;
+                    app.selected_resolution_index = 0;
+                    app.tui_logs.push(format!("Noise: {}", status_str));
                 }
             }
             Action::None => {}

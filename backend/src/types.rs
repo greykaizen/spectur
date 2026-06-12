@@ -116,6 +116,15 @@ pub struct TabSession {
     pub page_url: String,
     pub page_title: String,
     pub streams: Vec<CapturedStream>,
+    pub show_noise: bool,
+}
+
+impl TabSession {
+    pub fn filtered_streams(&self) -> Vec<&CapturedStream> {
+        self.streams.iter()
+            .filter(|s| self.show_noise || !s.is_noise())
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,6 +143,27 @@ pub struct CapturedStream {
     pub format: StreamFormat,
     pub probe_state: ProbeState,
     pub manifest_content: Option<String>,
+}
+
+impl CapturedStream {
+    pub fn is_noise(&self) -> bool {
+        if self.format == StreamFormat::Ts {
+            return true;
+        }
+        let url_lower = self.url.to_lowercase();
+        if url_lower.contains(".m4s") 
+            || url_lower.contains("/segment") 
+            || url_lower.contains("/fragment") 
+            || url_lower.contains("/chunk") 
+            || url_lower.contains("/init-") 
+            || url_lower.contains("seg-") 
+            || url_lower.contains("/range/") 
+            || url_lower.contains("/bytes/") 
+        {
+            return true;
+        }
+        false
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -280,7 +310,8 @@ impl AppState {
 
     pub fn add_stream(&mut self, payload: StreamPayload) -> (usize, bool) {
         let format = detect_format(&payload.url, &payload.response_headers);
-        
+        let dedup = path_dedup(&payload.url);
+
         let tab_pos = self
             .tabs
             .iter()
@@ -292,12 +323,8 @@ impl AppState {
                 if s.url == payload.url {
                     return true;
                 }
-                if s.format == StreamFormat::Mp4 && format == StreamFormat::Mp4 {
-                    if let (Ok(u1), Ok(u2)) = (url::Url::parse(&s.url), url::Url::parse(&payload.url)) {
-                        if u1.path() == u2.path() && u1.host() == u2.host() {
-                            return true;
-                        }
-                    }
+                if s.format == format && path_dedup(&s.url) == dedup {
+                    return true;
                 }
                 false
             }) {
@@ -348,6 +375,7 @@ impl AppState {
                     payload.page_title
                 },
                 streams: vec![captured],
+                show_noise: false,
             });
             (idx, false)
         }
@@ -358,13 +386,14 @@ impl AppState {
             return None;
         }
         let tab = &self.tabs[self.selected_tab_index];
-        if tab.streams.is_empty() {
+        let fs = tab.filtered_streams();
+        if fs.is_empty() {
             return None;
         }
-        if self.selected_stream_index >= tab.streams.len() {
+        if self.selected_stream_index >= fs.len() {
             return None;
         }
-        Some(&tab.streams[self.selected_stream_index])
+        Some(fs[self.selected_stream_index])
     }
 
     pub fn next_tab(&mut self) {
@@ -389,9 +418,10 @@ impl AppState {
     pub fn next_stream(&mut self) {
         if !self.tabs.is_empty() {
             let tab = &self.tabs[self.selected_tab_index];
-            if tab.streams.len() > 1 {
+            let fs_len = tab.filtered_streams().len();
+            if fs_len > 1 {
                 self.selected_stream_index =
-                    (self.selected_stream_index + 1) % tab.streams.len();
+                    (self.selected_stream_index + 1) % fs_len;
                 self.selected_resolution_index = 0;
             }
         }
@@ -400,11 +430,12 @@ impl AppState {
     pub fn prev_stream(&mut self) {
         if !self.tabs.is_empty() {
             let tab = &self.tabs[self.selected_tab_index];
-            if !tab.streams.is_empty() {
+            let fs_len = tab.filtered_streams().len();
+            if fs_len > 0 {
                 self.selected_stream_index = self
                     .selected_stream_index
                     .checked_sub(1)
-                    .unwrap_or(tab.streams.len() - 1);
+                    .unwrap_or(fs_len - 1);
                 self.selected_resolution_index = 0;
             }
         }
@@ -468,7 +499,6 @@ fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> Strea
             return StreamFormat::Ts;
         }
     }
-
     for (k, v) in response_headers {
         if k.to_lowercase() == "content-type" {
             let v_lower = v.to_lowercase();
@@ -486,6 +516,16 @@ fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> Strea
             }
         }
     }
-
     StreamFormat::Unknown
+}
+
+fn path_dedup(url: &str) -> String {
+    if let Ok(parsed) = url::Url::parse(url) {
+        let path = parsed.path();
+        if let Some(last_slash) = path.rfind('/') {
+            let base = &path[..last_slash + 1];
+            return format!("{}|{}", parsed.host_str().unwrap_or(""), base);
+        }
+    }
+    url.to_string()
 }

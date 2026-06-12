@@ -6,6 +6,56 @@ use regex::Regex;
 
 use crate::types::{AppState, DownloadStatus, YtFormat};
 
+pub async fn spawn_yt_format_download(
+    state: Arc<Mutex<AppState>>,
+    url: String,
+    format: YtFormat,
+) {
+    let output_dir = "/tmp/spectur-downloads";
+    let _ = std::fs::create_dir_all(output_dir);
+
+    let task_id: usize;
+    {
+        let mut app = state.lock().await;
+        task_id = app.downloads.len();
+        app.downloads.push(crate::types::DownloadTask {
+            id: task_id,
+            stream_url: url.clone(),
+            output_path: String::new(),
+            progress: 0,
+            speed_mbps: 0.0,
+            log_lines: Vec::new(),
+            status: DownloadStatus::Running,
+        });
+        app.tui_logs.push(format!("Starting YT download: {} (itag {})", format.resolution_label(), format.itag));
+    }
+
+    let args = vec![
+        url.to_string(),
+        "-o".into(),
+        format!("/tmp/spectur-downloads/%(title)s.%(ext)s"),
+        "-f".into(),
+        format.itag.to_string(),
+    ];
+
+    let result = spawn_and_stream("yt-dlp", &args, state.clone(), task_id).await;
+
+    let mut app = state.lock().await;
+    if let Some(task) = app.downloads.get_mut(task_id) {
+        match result {
+            Ok(()) => {
+                task.status = DownloadStatus::Finished;
+                task.progress = 100;
+                app.tui_logs.push("YT download complete".into());
+            }
+            Err(e) => {
+                task.status = DownloadStatus::Failed(e.clone());
+                app.tui_logs.push(format!("YT download failed: {}", e));
+            }
+        }
+    }
+}
+
 pub async fn spawn_download(
     state: Arc<Mutex<AppState>>,
     stream_url: String,
