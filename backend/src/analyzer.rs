@@ -65,6 +65,15 @@ async fn detect_and_fetch(
                 parse_hls(url, headers).await
             } else if path.contains(".mpd") {
                 parse_dash(url, headers).await
+            } else if path.contains("master.json") || path.contains("playlist.json") {
+                // Vimeo serves DASH MPD at the same path with .mpd extension
+                let mpd_url = url.replace(".json", ".mpd");
+                let mpd_url = if mpd_url.contains('?') {
+                    format!("{}&query_string_ranges=1", mpd_url)
+                } else {
+                    format!("{}?query_string_ranges=1", mpd_url)
+                };
+                parse_dash(&mpd_url, headers).await
             } else if path.contains(".mp4") {
                 parse_mp4(url, headers).await
             } else {
