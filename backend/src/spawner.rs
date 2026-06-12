@@ -10,6 +10,7 @@ pub async fn spawn_yt_format_download(
     state: Arc<Mutex<AppState>>,
     url: String,
     format: YtFormat,
+    is_test: bool,
 ) {
     let output_dir = "/tmp/spectur-downloads";
     let _ = std::fs::create_dir_all(output_dir);
@@ -27,16 +28,25 @@ pub async fn spawn_yt_format_download(
             log_lines: Vec::new(),
             status: DownloadStatus::Running,
         });
-        app.tui_logs.push(format!("Starting YT download: {} (itag {})", format.resolution_label(), format.itag));
+        app.tui_logs.push(format!("Starting YT{} download: {} (itag {})", if is_test { " test" } else { "" }, format.resolution_label(), format.itag));
     }
 
-    let args = vec![
+    let mut args = vec![
         url.to_string(),
         "-o".into(),
-        format!("/tmp/spectur-downloads/%(title)s.%(ext)s"),
+        if is_test {
+            format!("/tmp/spectur-downloads/%(title)s_test.%(ext)s")
+        } else {
+            format!("/tmp/spectur-downloads/%(title)s.%(ext)s")
+        },
         "-f".into(),
         format.itag.to_string(),
     ];
+
+    if is_test {
+        args.push("--download-sections".into());
+        args.push("*0:00-0:10".into());
+    }
 
     let result = spawn_and_stream("yt-dlp", &args, state.clone(), task_id).await;
 
@@ -60,6 +70,7 @@ pub async fn spawn_download(
     state: Arc<Mutex<AppState>>,
     stream_url: String,
     resolution: Option<String>,
+    is_test: bool,
 ) {
     let output_dir = "/tmp/spectur-downloads";
     let _ = std::fs::create_dir_all(output_dir);
@@ -72,7 +83,11 @@ pub async fn spawn_download(
         .next()
         .unwrap_or("download");
 
-    let output_path = format!("{}/{}", output_dir, filename);
+    let output_path = if is_test {
+        format!("{}/{}_test", output_dir, filename)
+    } else {
+        format!("{}/{}", output_dir, filename)
+    };
 
     let task_id: usize;
     {
@@ -87,7 +102,7 @@ pub async fn spawn_download(
             log_lines: Vec::new(),
             status: DownloadStatus::Running,
         });
-        app.tui_logs.push(format!("Starting download: {}", stream_url));
+        app.tui_logs.push(format!("Starting{} download: {}", if is_test { " test" } else { "" }, stream_url));
     }
 
     let (request_headers, keys, is_yt, yt_format) = {
@@ -144,9 +159,9 @@ pub async fn spawn_download(
     };
 
     let result = if is_yt {
-        spawn_yt_download(&stream_url, &output_path, state.clone(), task_id, yt_format).await
+        spawn_yt_download(&stream_url, &output_path, state.clone(), task_id, yt_format, is_test).await
     } else {
-        run_downloader(&stream_url, &output_path, state.clone(), task_id, resolution, request_headers, keys).await
+        run_downloader(&stream_url, &output_path, state.clone(), task_id, resolution, request_headers, keys, is_test).await
     };
 
     let mut app = state.lock().await;
@@ -172,15 +187,15 @@ async fn spawn_yt_download(
     state: Arc<Mutex<AppState>>,
     task_id: usize,
     format: Option<YtFormat>,
+    is_test: bool,
 ) -> Result<(), String> {
     let path = std::path::Path::new(output_path);
     let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("/tmp/spectur-downloads");
-    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("download");
 
     let mut args = vec![
         url.to_string(),
         "-o".into(),
-        format!("{}/%(title)s.%(ext)s", parent),
+        format!("{}/%(title)s{}.%(ext)s", parent, if is_test { "_test" } else { "" }),
     ];
 
     if let Some(ref fmt) = format {
@@ -189,6 +204,11 @@ async fn spawn_yt_download(
     } else {
         args.push("-f".into());
         args.push("bestvideo+bestaudio/best".into());
+    }
+
+    if is_test {
+        args.push("--download-sections".into());
+        args.push("*0:00-0:10".into());
     }
 
     spawn_and_stream("yt-dlp", &args, state, task_id).await
@@ -202,9 +222,10 @@ async fn run_downloader(
     resolution: Option<String>,
     headers: std::collections::HashMap<String, String>,
     keys: Vec<crate::types::KeyInfo>,
+    is_test: bool,
 ) -> Result<(), String> {
     let tool = select_downloader(url);
-    let args = build_args(&tool, url, output_path, resolution, &headers, &keys);
+    let args = build_args(&tool, url, output_path, resolution, &headers, &keys, is_test);
 
     spawn_and_stream(tool.binary, &args, state, task_id).await
 }
@@ -295,6 +316,7 @@ fn build_args(
     resolution: Option<String>,
     headers: &std::collections::HashMap<String, String>,
     keys: &[crate::types::KeyInfo],
+    is_test: bool,
 ) -> Vec<String> {
     let mut args = Vec::new();
     let header_flag = if tool.binary == "aria2c" { "--header=" } else { "-H" };
@@ -330,6 +352,10 @@ fn build_args(
             args.push(format!("{}/tmp-{}", parent, file_stem));
             args.push("--auto-select".into());
             args.push("--check-segments-count=false".into());
+            if is_test {
+                args.push("--custom-range".into());
+                args.push("0-5".into());
+            }
             if let Some(res) = resolution {
                 args.push("-sv".into());
                 args.push(format!("res={}", res));

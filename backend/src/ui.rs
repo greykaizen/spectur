@@ -15,6 +15,7 @@ pub enum Action {
     Enter,
     Copy,
     ToggleNoise,
+    TestDownload,
 }
 
 pub fn render(frame: &mut Frame, state: &AppState) {
@@ -146,7 +147,7 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("[ Enter to download selected YT format ]", Style::default().fg(Color::Green)),
+            Span::styled("[ Enter to download selected YT format, t to test ]", Style::default().fg(Color::Green)),
         ]));
     }
 
@@ -215,7 +216,7 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
                     }
                 }
                 lines.push(Line::from(""));
-                lines.push(Line::from(vec![Span::styled("[ Enter to download ]", Style::default().fg(Color::Green))]));
+                lines.push(Line::from(vec![Span::styled("[ Enter to download, t to test ]", Style::default().fg(Color::Green))]));
             }
             ProbeState::Probing => {
                 if lines.is_empty() {
@@ -381,6 +382,7 @@ pub fn handle_events(state: &mut AppState) -> std::io::Result<Action> {
             KeyCode::Left => { if state.focused_panel == Panel::Streams { state.prev_tab(); } }
             KeyCode::Right => { if state.focused_panel == Panel::Streams { state.next_tab(); } }
             KeyCode::Enter => return Ok(Action::Enter),
+            KeyCode::Char('t') | KeyCode::Char('T') => return Ok(Action::TestDownload),
             KeyCode::Char('c') | KeyCode::Char('C') => return Ok(Action::Copy),
             KeyCode::Char('n') | KeyCode::Char('N') => return Ok(Action::ToggleNoise),
             _ => {}

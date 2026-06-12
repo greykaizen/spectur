@@ -32,7 +32,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         match action {
             Action::Quit => break,
-            Action::Enter => {
+            Action::Enter | Action::TestDownload => {
+                let is_test = action == Action::TestDownload;
                 let selection = {
                     let app = state.lock().await;
                     // YT format download: use yt-dlp with itag directly
@@ -48,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let (Some(fmt), Some(url)) = (yt_fmt, yt_url) {
                             let download_state = Arc::clone(&state);
                             tokio::spawn(async move {
-                                spawner::spawn_yt_format_download(download_state, url, fmt).await;
+                                spawner::spawn_yt_format_download(download_state, url, fmt, is_test).await;
                             });
                         }
                         continue;
@@ -78,9 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if has_metadata {
                         let download_state = Arc::clone(&state);
                         tokio::spawn(async move {
-                            spawner::spawn_download(download_state, url, resolution).await;
+                            spawner::spawn_download(download_state, url, resolution, is_test).await;
                         });
-                    } else {
+                    } else if !is_test {
                         let analyzer_state = Arc::clone(&state);
                         tokio::spawn(async move {
                             analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
