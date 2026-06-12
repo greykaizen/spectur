@@ -222,6 +222,20 @@ export default defineContentScript({
                         } catch(e) {}
                       }
                     }
+                  }
+                  } else if (self.responseType === "json" && self.response) {
+                    // Vimeo players use XHR with responseType="json" —
+                    // responseText is empty, response is the parsed object
+                    try {
+                      var found = [];
+                      deepExtractStrings(self.response, found, 5);
+                      for (var i = 0; i < found.length; i++) {
+                        if (MEDIA_URL_RE.test(found[i])) {
+                          _post(found[i], '', found[i].toLowerCase().indexOf('.m3u8') !== -1 ? 'm3u8' : 'mpd', false);
+                          break;
+                        }
+                      }
+                    } catch(e) {}
                   } else if (self.responseType === "arraybuffer" && self.response) {
                     try {
                       var decoder = new TextDecoder('utf-8');
