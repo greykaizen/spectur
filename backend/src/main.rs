@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             _ => (false, None),
                         };
                         (
-                            app.selected_tab_index,
+                            s.stream_id,
                             s.url.clone(),
                             s.request_headers.clone(),
                             has_metadata,
@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     })
                 };
 
-                if let Some((tab_idx, url, headers, has_metadata, resolution, manifest_content)) = selection {
+                if let Some((stream_id, url, headers, has_metadata, resolution, manifest_content)) = selection {
                     if has_metadata {
                         let download_state = Arc::clone(&state);
                         tokio::spawn(async move {
@@ -84,7 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else if !is_test {
                         let analyzer_state = Arc::clone(&state);
                         tokio::spawn(async move {
-                            analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
+                            analyzer::analyze_manifest(analyzer_state, stream_id, url, headers, manifest_content).await;
                         });
                     }
                 }

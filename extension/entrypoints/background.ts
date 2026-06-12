@@ -57,6 +57,8 @@ export default defineBackground(() => {
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   function isMediaRequest(url: string): boolean {
+    const lower = url.toLowerCase();
+    // if (lower.includes('master.json') || lower.includes('playlist.json')) return true;
     return MEDIA_EXTENSIONS.test(url);
   }
 

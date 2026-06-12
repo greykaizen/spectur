@@ -279,10 +279,14 @@ fn render_progress(frame: &mut Frame, area: Rect, state: &AppState) {
             let style = if state.focused_panel == Panel::Downloads && i == state.selected_download_index {
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
             } else { Style::default() };
+            let file_name = std::path::Path::new(&task.output_path)
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("unknown");
             lines.push(Line::from(vec![
                 Span::styled(prefix, style),
                 Span::styled(format!("[{}]", status_str), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
-                Span::raw(format!(" #{}: {:>3}% {:.1}MB/s", task.id + 1, task.progress, task.speed_mbps)),
+                Span::raw(format!(" #{}: {} ({}%) {:.1}MB/s", task.id + 1, file_name, task.progress, task.speed_mbps)),
             ]));
         }
     }

@@ -103,6 +103,21 @@ fn clean_filename(filename: &str, format: &crate::types::StreamFormat) -> String
     }
 }
 
+fn get_unique_output_path(dir: &str, base: &str, ext: &str) -> String {
+    let mut path = format!("{}/{}{}", dir, base, ext);
+    if !std::path::Path::new(&path).exists() {
+        return path;
+    }
+    let mut counter = 1;
+    loop {
+        path = format!("{}/{}({}){}", dir, base, counter, ext);
+        if !std::path::Path::new(&path).exists() {
+            return path;
+        }
+        counter += 1;
+    }
+}
+
 pub async fn spawn_download(
     state: Arc<Mutex<AppState>>,
     stream_url: String,
@@ -147,7 +162,7 @@ pub async fn spawn_download(
             final_headers.insert(
                 "User-Agent".to_string(),
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
-            );
+                );
         }
         if let Some(tab) = matching_tab {
             let has_referer = final_headers.keys().any(|k| k.to_lowercase() == "referer");
@@ -185,11 +200,13 @@ pub async fn spawn_download(
         ext = String::new();
     }
 
-    let output_path = if is_test {
-        format!("{}/{}_test{}", output_dir, base_name, ext)
+    let final_base = if is_test {
+        format!("{}_test", base_name)
     } else {
-        format!("{}/{}{}", output_dir, base_name, ext)
+        base_name
     };
+
+    let output_path = get_unique_output_path(output_dir, &final_base, &ext);
 
     let task_id: usize;
     {
@@ -288,6 +305,7 @@ async fn spawn_and_stream(
 ) -> Result<(), String> {
     let mut child = Command::new(binary)
         .args(args)
+        .kill_on_drop(true)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

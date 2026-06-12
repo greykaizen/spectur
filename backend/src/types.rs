@@ -98,6 +98,7 @@ pub struct KeyPayload {
 
 #[derive(Debug, Clone)]
 pub struct AppState {
+    pub next_stream_id: u64,
     pub intercepted_keys: Vec<KeyPayload>,
     pub selected_yt_format_index: usize,
     pub selected_tab_index: usize,
@@ -136,6 +137,7 @@ pub enum ProbeState {
 
 #[derive(Debug, Clone)]
 pub struct CapturedStream {
+    pub stream_id: u64,
     pub url: String,
     pub method: String,
     pub request_headers: HashMap<String, String>,
@@ -296,6 +298,7 @@ pub enum Panel {
 impl AppState {
     pub fn new() -> Self {
         Self {
+            next_stream_id: 1,
             selected_tab_index: 0,
             selected_stream_index: 0,
             selected_resolution_index: 0,
@@ -309,8 +312,7 @@ impl AppState {
         }
     }
 
-    pub fn add_stream(&mut self, mut payload: StreamPayload) -> (usize, bool) {
-        payload.url = translate_generic_json_manifest(&payload.url);
+    pub fn add_stream(&mut self, payload: StreamPayload) -> (usize, u64, bool) {
         let format = detect_format(&payload.url, &payload.response_headers);
         let dedup = path_dedup(&payload.url);
 
@@ -325,11 +327,12 @@ impl AppState {
                 if s.url == payload.url {
                     return true;
                 }
-                if format != StreamFormat::Mp4 && format != StreamFormat::Youtube && s.format == format && path_dedup(&s.url) == dedup {
+                if format != StreamFormat::Mp4 && s.format == format && path_dedup(&s.url) == dedup {
                     return true;
                 }
                 false
             }) {
+                let stream_id = existing.stream_id;
                 let should_analyze = if payload.manifest_content.is_some() {
                     match &existing.probe_state {
                         ProbeState::Done(_) => false,
@@ -344,9 +347,12 @@ impl AppState {
                 };
                 existing.url = payload.url;
                 existing.request_headers = payload.request_headers;
-                (idx, !should_analyze)
+                (idx, stream_id, !should_analyze)
             } else {
+                let stream_id = self.next_stream_id;
+                self.next_stream_id += 1;
                 let captured = CapturedStream {
+                    stream_id,
                     url: payload.url.clone(),
                     method: payload.method,
                     request_headers: payload.request_headers.clone(),
@@ -356,10 +362,13 @@ impl AppState {
                     manifest_content: payload.manifest_content.clone(),
                 };
                 tab.streams.push(captured);
-                (idx, false)
+                (idx, stream_id, false)
             }
         } else {
+            let stream_id = self.next_stream_id;
+            self.next_stream_id += 1;
             let captured = CapturedStream {
+                stream_id,
                 url: payload.url.clone(),
                 method: payload.method,
                 request_headers: payload.request_headers.clone(),
@@ -380,7 +389,7 @@ impl AppState {
                 show_noise: false,
                 yt_formats: Vec::new(),
             });
-            (idx, false)
+            (idx, stream_id, false)
         }
     }
 
@@ -468,19 +477,21 @@ impl AppState {
         }
     }
 
-    pub fn set_stream_probe_done(&mut self, tab_idx: usize, url: &str, metadata: StreamMetadata, format: StreamFormat) {
-        if let Some(tab) = self.tabs.get_mut(tab_idx) {
-            if let Some(stream) = tab.streams.iter_mut().find(|s| s.url == url) {
+    pub fn set_stream_probe_done(&mut self, stream_id: u64, metadata: StreamMetadata, format: StreamFormat) {
+        for tab in &mut self.tabs {
+            if let Some(stream) = tab.streams.iter_mut().find(|s| s.stream_id == stream_id) {
                 stream.probe_state = ProbeState::Done(metadata);
                 stream.format = format;
+                return;
             }
         }
     }
 
-    pub fn set_stream_probe_failed(&mut self, tab_idx: usize, url: &str, error: String) {
-        if let Some(tab) = self.tabs.get_mut(tab_idx) {
-            if let Some(stream) = tab.streams.iter_mut().find(|s| s.url == url) {
+    pub fn set_stream_probe_failed(&mut self, stream_id: u64, error: String) {
+        for tab in &mut self.tabs {
+            if let Some(stream) = tab.streams.iter_mut().find(|s| s.stream_id == stream_id) {
                 stream.probe_state = ProbeState::Failed(error);
+                return;
             }
         }
     }
@@ -492,7 +503,7 @@ fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> Strea
         if path.contains(".m3u8") {
             return StreamFormat::Hls;
         }
-        if path.contains(".mpd") || path.contains("master.json") || path.contains("playlist.json") {
+        if path.contains(".mpd") {
             return StreamFormat::Dash;
         }
         if path.contains(".mp4") {
@@ -522,7 +533,8 @@ fn detect_format(url: &str, response_headers: &HashMap<String, String>) -> Strea
     StreamFormat::Unknown
 }
 
-fn translate_generic_json_manifest(url: &str) -> String {
+/*
+pub fn translate_generic_json_manifest(url: &str) -> String {
     if let Ok(mut parsed) = url::Url::parse(url) {
         let path = parsed.path().to_lowercase();
         let is_json_manifest = path.contains("master.json") || path.contains("playlist.json");
@@ -561,6 +573,7 @@ fn translate_generic_json_manifest(url: &str) -> String {
     }
     url.to_string()
 }
+*/
 
 fn path_dedup(url: &str) -> String {
     if let Ok(parsed) = url::Url::parse(url) {

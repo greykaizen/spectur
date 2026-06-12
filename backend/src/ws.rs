@@ -87,10 +87,15 @@ async fn handle_connection(
                                         });
                                         idx
                                     };
-                                    let tab = &mut app.tabs[tab_idx];
-                                    let has_yt_stream = tab.streams.iter().any(|s| s.format == crate::types::StreamFormat::Youtube);
-                                    if !has_yt_stream {
-                                        tab.streams.push(crate::types::CapturedStream {
+                                    let has_yt = app.tabs.get(tab_idx).map_or(false, |t| {
+                                        t.streams.iter().any(|s| s.format == crate::types::StreamFormat::Youtube)
+                                    });
+                                    if !has_yt {
+                                        let new_id = app.next_stream_id;
+                                        app.next_stream_id += 1;
+                                        if let Some(tab) = app.tabs.get_mut(tab_idx) {
+                                            tab.streams.push(crate::types::CapturedStream {
+                                                stream_id: new_id,
                                             url: page_url.clone(),
                                             method: "GET".to_string(),
                                             request_headers: std::collections::HashMap::new(),
@@ -108,7 +113,8 @@ async fn handle_connection(
                                             }),
                                             manifest_content: None,
                                         });
-                                    }
+                                        } // close if let Some(tab)
+                                    } // close if !has_yt
                                     app.tui_logs.push(format!("YouTube formats parsed for {}", page_title));
                                 }
                             } else if let Some(payload) = ws_msg.to_stream_payload() {
@@ -117,12 +123,12 @@ async fn handle_connection(
                                 let manifest_content = payload.manifest_content.clone();
 
                                 let mut app = state.lock().await;
-                                let (tab_idx, exists) = app.add_stream(payload);
+                                let (tab_idx, stream_id, exists) = app.add_stream(payload);
 
                                 if !exists {
                                     let analyzer_state = Arc::clone(&state);
                                     tokio::spawn(async move {
-                                        crate::analyzer::analyze_manifest(analyzer_state, tab_idx, url, headers, manifest_content).await;
+                                        crate::analyzer::analyze_manifest(analyzer_state, stream_id, url, headers, manifest_content).await;
                                     });
                                 }
                             }

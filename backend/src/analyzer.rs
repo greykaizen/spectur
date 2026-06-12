@@ -6,7 +6,7 @@ use crate::types::{AppState, DrmInfo, KeyInfo, ResolutionInfo, StreamMetadata, S
 
 pub async fn analyze_manifest(
     state: Arc<Mutex<AppState>>,
-    tab_idx: usize,
+    stream_id: u64,
     url: String,
     headers: HashMap<String, String>,
     manifest_content: Option<String>,
@@ -15,26 +15,29 @@ pub async fn analyze_manifest(
     let mut app = state.lock().await;
     match result {
         Ok((mut metadata, format)) => {
-            // Let's associate any already-intercepted keys for this tab!
-            if let Some(tab) = app.tabs.get(tab_idx) {
-                let page_url = &tab.page_url;
-                let matching_keys: Vec<String> = app.intercepted_keys.iter()
-                    .filter(|k| &k.page_url == page_url)
-                    .map(|k| k.key.iter().map(|b| format!("{:02x}", b)).collect())
-                    .collect();
-                
-                for (i, key_info) in metadata.keys.iter_mut().enumerate() {
-                    if let Some(hex) = matching_keys.get(i).or_else(|| matching_keys.first()) {
-                        key_info.key_hex = Some(hex.clone());
-                    }
+            let matching_keys: Vec<String> = app.intercepted_keys.iter()
+                .filter(|k| {
+                    let stream_page = app.tabs.iter()
+                        .flat_map(|t| &t.streams)
+                        .find(|s| s.stream_id == stream_id)
+                        .and_then(|s| app.tabs.iter().find(|t| t.streams.iter().any(|ts| ts.stream_id == s.stream_id)))
+                        .map(|t| &t.page_url);
+                    stream_page.map_or(false, |p| &k.page_url == p)
+                })
+                .map(|k| k.key.iter().map(|b| format!("{:02x}", b)).collect())
+                .collect();
+
+            for (i, key_info) in metadata.keys.iter_mut().enumerate() {
+                if let Some(hex) = matching_keys.get(i).or_else(|| matching_keys.first()) {
+                    key_info.key_hex = Some(hex.clone());
                 }
             }
-            app.set_stream_probe_done(tab_idx, &url, metadata, format);
+            app.set_stream_probe_done(stream_id, metadata, format);
         }
         Err(e) => {
             let err_str = e.to_string();
-            app.tui_logs.push(format!("Analyzer error for {}: {}", url, err_str));
-            app.set_stream_probe_failed(tab_idx, &url, err_str);
+            app.tui_logs.push(format!("Analyzer error for stream {}: {}", stream_id, err_str));
+            app.set_stream_probe_failed(stream_id, err_str);
         }
     }
 }
@@ -481,14 +484,15 @@ async fn parse_mp4(
     let mut header_str = String::new();
     for (k, v) in &headers {
         let kl = k.to_lowercase();
-        if kl == "host" || kl == "accept-encoding" || kl == "content-length" || kl == "connection" {
+        if kl == "host" || kl == "accept-encoding" || kl == "content-length" || kl == "connection" || kl == "range" {
             continue;
         }
         header_str.push_str(&format!("{}: {}\r\n", k, v));
     }
 
     let mut cmd = tokio::process::Command::new("ffprobe");
-    cmd.arg("-v").arg("error")
+    cmd.kill_on_drop(true)
+       .arg("-v").arg("error")
        .arg("-show_entries")
        .arg("format=duration,size,bit_rate:stream=codec_name,codec_type,width,height,r_frame_rate")
        .arg("-of").arg("json");
