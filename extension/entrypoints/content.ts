@@ -23,6 +23,13 @@ export default defineContentScript({
           var _postYTFormats = function(formats) {
             window.postMessage({ type: 'SPECTUR_YT_FORMATS', formats: formats, href: window.location.href }, '*');
           };
+          var deepExtractStrings = function(obj, out, maxDepth) {
+            if (maxDepth <= 0 || !obj) return;
+            if (typeof obj === 'string') { if (obj.length > 10) out.push(obj); return; }
+            if (Array.isArray(obj)) { for (var i = 0; i < obj.length && i < 200; i++) deepExtractStrings(obj[i], out, maxDepth - 1); }
+            else if (typeof obj === 'object') { for (var k in obj) { if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue; deepExtractStrings(obj[k], out, maxDepth - 1); } }
+          };
+          var MEDIA_URL_RE = /\.(m3u8|mpd|master\.json)($|\?)/i;
 
           // ---- ytInitialPlayerResponse observer (YouTube-specific) ----
           // YT sets this on window when page loads with video data including all formats
@@ -161,9 +168,25 @@ export default defineContentScript({
                   var upper = text.toUpperCase();
                   if (upper.indexOf('#EXTM3U') !== -1) {
                     _post(url, text, 'm3u8', false);
-                  } else if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
-                    _post(url, text, 'mpd', false);
+                    return;
                   }
+                  if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
+                    _post(url, text, 'mpd', false);
+                    return;
+                  }
+                  // Fallback: recursive JSON string scavenger
+                  try {
+                    var json = JSON.parse(text);
+                    var found = [];
+                    deepExtractStrings(json, found, 5);
+                    for (var i = 0; i < found.length; i++) {
+                      if (MEDIA_URL_RE.test(found[i])) {
+                        var isM3u8 = found[i].toLowerCase().indexOf('.m3u8') !== -1;
+                        _post(found[i], '', isM3u8 ? 'm3u8' : 'mpd', false);
+                        break;
+                      }
+                    }
+                  } catch(e) {}
                 }).catch(function() {});
               }
             } catch (_) {}
@@ -185,6 +208,18 @@ export default defineContentScript({
                         _post(url, text, 'm3u8', false);
                       } else if (upper.indexOf('<MPD') !== -1 && upper.indexOf('</MPD>') !== -1) {
                         _post(url, text, 'mpd', false);
+                      } else {
+                        try {
+                          var json = JSON.parse(text);
+                          var found = [];
+                          deepExtractStrings(json, found, 5);
+                          for (var i = 0; i < found.length; i++) {
+                            if (MEDIA_URL_RE.test(found[i])) {
+                              _post(found[i], '', found[i].toLowerCase().indexOf('.m3u8') !== -1 ? 'm3u8' : 'mpd', false);
+                              break;
+                            }
+                          }
+                        } catch(e) {}
                       }
                     }
                   } else if (self.responseType === "arraybuffer" && self.response) {
