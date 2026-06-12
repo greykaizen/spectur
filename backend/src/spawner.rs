@@ -326,6 +326,8 @@ fn build_args(
             args.push(parent.to_string());
             args.push("--save-name".into());
             args.push(file_stem.to_string());
+            args.push("--tmp-dir".into());
+            args.push(format!("{}/tmp-{}", parent, file_stem));
             args.push("--auto-select".into());
             args.push("--check-segments-count=false".into());
             if let Some(res) = resolution {
