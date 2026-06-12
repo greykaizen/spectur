@@ -58,7 +58,7 @@ export default defineBackground(() => {
 
   function isMediaRequest(url: string): boolean {
     const lower = url.toLowerCase();
-    if (lower.includes('master.json') || lower.includes('playlist.json')) return true;
+    if (lower.includes('master.json')) return true;
     return MEDIA_EXTENSIONS.test(url);
   }
 
