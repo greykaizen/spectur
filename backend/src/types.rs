@@ -323,7 +323,7 @@ impl AppState {
                 if s.url == payload.url {
                     return true;
                 }
-                if s.format == format && path_dedup(&s.url) == dedup {
+                if format != StreamFormat::Mp4 && format != StreamFormat::Youtube && s.format == format && path_dedup(&s.url) == dedup {
                     return true;
                 }
                 false

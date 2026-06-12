@@ -429,6 +429,7 @@ export default defineContentScript({
       if (event.source !== window) return;
       if (event.data && event.data.type === 'SPECTUR_DECRYPTED') {
         const { url, content, format, isPageUrl } = event.data;
+        if (url && url.toLowerCase().startsWith('blob:')) return;
         try {
           browser.runtime.sendMessage({
             action: 'addDecryptedManifest',
