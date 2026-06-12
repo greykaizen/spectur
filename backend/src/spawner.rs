@@ -92,11 +92,19 @@ pub async fn spawn_download(
 
     let (request_headers, keys, is_yt, yt_format) = {
         let app = state.lock().await;
-        let stream = app.tabs.iter()
-            .flat_map(|t| &t.streams)
-            .find(|s| s.url == stream_url);
-        let headers = stream.map(|s| s.request_headers.clone()).unwrap_or_default();
-        let keys = stream.and_then(|s| match &s.probe_state {
+        
+        let mut matching_tab = None;
+        let mut matching_stream = None;
+        for tab in &app.tabs {
+            if let Some(s) = tab.streams.iter().find(|s| s.url == stream_url) {
+                matching_tab = Some(tab.clone());
+                matching_stream = Some(s.clone());
+                break;
+            }
+        }
+
+        let headers = matching_stream.as_ref().map(|s| s.request_headers.clone()).unwrap_or_default();
+        let keys = matching_stream.as_ref().and_then(|s| match &s.probe_state {
             crate::types::ProbeState::Done(m) => Some(m.keys.clone()),
             _ => None,
         }).unwrap_or_default();
@@ -109,7 +117,30 @@ pub async fn spawn_download(
         } else {
             None
         };
-        (headers, keys, is_yt, yt_fmt)
+
+        let mut final_headers = headers;
+        let has_ua = final_headers.keys().any(|k| k.to_lowercase() == "user-agent");
+        if !has_ua {
+            final_headers.insert(
+                "User-Agent".to_string(),
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36".to_string(),
+            );
+        }
+        if let Some(tab) = matching_tab {
+            let has_referer = final_headers.keys().any(|k| k.to_lowercase() == "referer");
+            if !has_referer && !tab.page_url.is_empty() {
+                final_headers.insert("Referer".to_string(), tab.page_url.clone());
+            }
+            let has_origin = final_headers.keys().any(|k| k.to_lowercase() == "origin");
+            if !has_origin && !tab.page_url.is_empty() {
+                if let Ok(parsed) = url::Url::parse(&tab.page_url) {
+                    let origin_val = format!("{}://{}", parsed.scheme(), parsed.host_str().unwrap_or(""));
+                    final_headers.insert("Origin".to_string(), origin_val);
+                }
+            }
+        }
+
+        (final_headers, keys, is_yt, yt_fmt)
     };
 
     let result = if is_yt {
@@ -295,6 +326,8 @@ fn build_args(
             args.push(parent.to_string());
             args.push("--save-name".into());
             args.push(file_stem.to_string());
+            args.push("--auto-select".into());
+            args.push("--check-segments-count=false".into());
             if let Some(res) = resolution {
                 args.push("-sv".into());
                 args.push(format!("res={}", res));

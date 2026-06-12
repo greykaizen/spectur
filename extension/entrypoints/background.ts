@@ -330,7 +330,7 @@ export default defineBackground(() => {
         }
       }
 
-      if (!matchedUrl || matchedUrl === pageUrl) return;
+      if (!matchedUrl || matchedUrl === pageUrl || matchedUrl.startsWith('blob:')) return;
       
       const payload: StreamPayload = {
         requestId: 'decrypted-' + Date.now(),
