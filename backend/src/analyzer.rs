@@ -224,6 +224,7 @@ fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<d
                 keys,
                 drm,
                 segment_base_url: None,
+                size_bytes: None,
             })
         }
         m3u8_rs::Playlist::MediaPlaylist(media) => {
@@ -261,6 +262,7 @@ fn parse_hls_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<d
                 keys,
                 drm,
                 segment_base_url: None,
+                size_bytes: None,
             })
         }
     }
@@ -433,6 +435,7 @@ fn parse_dash_content(body: &str, base_url: &str) -> Result<StreamMetadata, Box<
         keys: Vec::new(),
         drm: drm_infos,
         segment_base_url: None,
+        size_bytes: None,
     })
 }
 
@@ -463,18 +466,133 @@ fn classify_drm(cp: &dash_mpd::ContentProtection) -> String {
 }
 
 async fn parse_mp4(
-    _url: &str,
-    _headers: HashMap<String, String>,
+    url: &str,
+    headers: HashMap<String, String>,
 ) -> Result<(StreamMetadata, StreamFormat), Box<dyn std::error::Error + Send + Sync>> {
+    let mut header_str = String::new();
+    for (k, v) in &headers {
+        let kl = k.to_lowercase();
+        if kl == "host" || kl == "accept-encoding" || kl == "content-length" || kl == "connection" {
+            continue;
+        }
+        header_str.push_str(&format!("{}: {}\r\n", k, v));
+    }
+
+    let mut cmd = tokio::process::Command::new("ffprobe");
+    cmd.arg("-v").arg("error")
+       .arg("-show_format")
+       .arg("-show_streams")
+       .arg("-of").arg("json");
+
+    if !header_str.is_empty() {
+        cmd.arg("-headers").arg(header_str);
+    }
+    cmd.arg(url);
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let output_res = tokio::time::timeout(tokio::time::Duration::from_secs(5), cmd.output()).await;
+
+    match output_res {
+        Ok(Ok(output)) if output.status.success() => {
+            if let Ok(json_val) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                let duration = json_val["format"]["duration"]
+                    .as_str()
+                    .and_then(|s| s.parse::<f32>().ok())
+                    .unwrap_or(0.0);
+
+                let size_bytes = json_val["format"]["size"]
+                    .as_str()
+                    .and_then(|s| s.parse::<u64>().ok());
+
+                let bit_rate = json_val["format"]["bit_rate"]
+                    .as_str()
+                    .and_then(|s| s.parse::<u64>().ok())
+                    .unwrap_or(0);
+
+                let mut resolutions = Vec::new();
+                let mut audio_tracks = Vec::new();
+
+                if let Some(streams) = json_val["streams"].as_array() {
+                    for stream in streams {
+                        let codec_type = stream["codec_type"].as_str().unwrap_or("");
+                        if codec_type == "video" {
+                            let width = stream["width"].as_i64().unwrap_or(0);
+                            let height = stream["height"].as_i64().unwrap_or(0);
+                            let codec = stream["codec_name"].as_str().map(|s| s.to_string());
+                            let frame_rate_raw = stream["r_frame_rate"].as_str().unwrap_or("");
+                            let clean_fr = if !frame_rate_raw.is_empty() {
+                                let fr = clean_frame_rate(frame_rate_raw);
+                                if fr != "0" { Some(fr) } else { None }
+                            } else {
+                                None
+                            };
+
+                            if width > 0 && height > 0 {
+                                resolutions.push(ResolutionInfo {
+                                    label: format!("{}x{}", width, height),
+                                    bandwidth: bit_rate,
+                                    codecs: codec,
+                                    frame_rate: clean_fr,
+                                    mime_type: Some("video/mp4".to_string()),
+                                    url: Some(url.to_string()),
+                                });
+                            }
+                        } else if codec_type == "audio" {
+                            let codec = stream["codec_name"].as_str().unwrap_or("unknown");
+                            audio_tracks.push(format!("Audio Track ({})", codec));
+                        }
+                    }
+                }
+
+                return Ok((StreamMetadata {
+                    duration_seconds: duration,
+                    total_segments: 1,
+                    resolutions,
+                    audio_tracks,
+                    keys: Vec::new(),
+                    drm: Vec::new(),
+                    segment_base_url: None,
+                    size_bytes,
+                }, StreamFormat::Mp4));
+            }
+        }
+        _ => {}
+    }
+
     Ok((StreamMetadata {
         duration_seconds: 0.0,
         total_segments: 1,
-        resolutions: Vec::new(),
+        resolutions: vec![ResolutionInfo {
+            label: "Unknown Resolution".to_string(),
+            bandwidth: 0,
+            codecs: None,
+            frame_rate: None,
+            mime_type: Some("video/mp4".to_string()),
+            url: Some(url.to_string()),
+        }],
         audio_tracks: Vec::new(),
         keys: Vec::new(),
         drm: Vec::new(),
         segment_base_url: None,
+        size_bytes: None,
     }, StreamFormat::Mp4))
+}
+
+fn clean_frame_rate(fr: &str) -> String {
+    if let Some(pos) = fr.find('/') {
+        if let (Ok(num), Ok(den)) = (fr[..pos].parse::<f32>(), fr[pos+1..].parse::<f32>()) {
+            if den > 0.0 {
+                let val = num / den;
+                if val.fract() == 0.0 {
+                    return format!("{:.0}", val);
+                } else {
+                    return format!("{:.2}", val);
+                }
+            }
+        }
+    }
+    fr.to_string()
 }
 
 async fn probe_format_and_parse(

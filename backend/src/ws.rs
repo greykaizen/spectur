@@ -104,6 +104,7 @@ async fn handle_connection(
                                                 keys: Vec::new(),
                                                 drm: Vec::new(),
                                                 segment_base_url: None,
+                                                size_bytes: None,
                                             }),
                                             manifest_content: None,
                                         });

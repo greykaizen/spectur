@@ -185,6 +185,7 @@ pub struct StreamMetadata {
     pub keys: Vec<KeyInfo>,
     pub drm: Vec<DrmInfo>,
     pub segment_base_url: Option<String>,
+    pub size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

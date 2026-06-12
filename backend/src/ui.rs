@@ -170,6 +170,16 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
                     let secs = (meta.duration_seconds % 60.0) as u32;
                     lines.push(Line::from(format!("Duration: {:02}:{:02}", mins, secs)));
                 }
+                if let Some(bytes) = meta.size_bytes {
+                    let size_str = if bytes >= 1024 * 1024 * 1024 {
+                        format!("{:.2} GB", bytes as f64 / 1024.0 / 1024.0 / 1024.0)
+                    } else if bytes >= 1024 * 1024 {
+                        format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)
+                    } else {
+                        format!("{:.2} KB", bytes as f64 / 1024.0)
+                    };
+                    lines.push(Line::from(format!("File Size: {}", size_str)));
+                }
                 if meta.total_segments > 1 {
                     lines.push(Line::from(format!("Total Segments: {}", meta.total_segments)));
                 }

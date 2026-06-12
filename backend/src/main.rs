@@ -182,6 +182,9 @@ fn format_metadata_for_copy(stream: &crate::types::CapturedStream, selected_reso
         crate::types::ProbeState::Done(meta) => {
             s.push_str("Done\n");
             s.push_str(&format!("  Duration: {}s\n", meta.duration_seconds));
+            if let Some(bytes) = meta.size_bytes {
+                s.push_str(&format!("  File Size: {} bytes\n", bytes));
+            }
             s.push_str(&format!("  Total Segments: {}\n", meta.total_segments));
             s.push_str("  Resolutions:\n");
             for (i, r) in meta.resolutions.iter().enumerate() {
