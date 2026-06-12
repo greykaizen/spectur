@@ -36,9 +36,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let selection = {
                     let app = state.lock().await;
                     // YT format download: use yt-dlp with itag directly
-                    if !app.yt_formats.is_empty() && app.focused_panel == crate::types::Panel::Metadata {
-                        let yt_fmt = app.yt_formats.get(app.selected_yt_format_index).cloned();
-                        let yt_url = app.yt_page_url.clone();
+                    let current_yt_formats: &[crate::types::YtFormat] = if app.tabs.is_empty() {
+                        &[]
+                    } else {
+                        &app.tabs[app.selected_tab_index].yt_formats
+                    };
+                    if !current_yt_formats.is_empty() && app.focused_panel == crate::types::Panel::Metadata {
+                        let yt_fmt = current_yt_formats.get(app.selected_yt_format_index).cloned();
+                        let yt_url = app.tabs.get(app.selected_tab_index).map(|t| t.page_url.clone());
                         drop(app);
                         if let (Some(fmt), Some(url)) = (yt_fmt, yt_url) {
                             let download_state = Arc::clone(&state);
@@ -91,7 +96,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             app.selected_stream().map(|s| format_metadata_for_copy(s, app.selected_resolution_index))
                         }
                         crate::types::Panel::Downloads => {
-                            Some(format_logs_for_copy(&app.tui_logs))
+                            if app.downloads.is_empty() {
+                                Some(format_logs_for_copy(&app.tui_logs))
+                            } else {
+                                app.downloads.get(app.selected_download_index)
+                                    .map(|t| format_logs_for_copy(&t.log_lines))
+                                    .or_else(|| Some(format_logs_for_copy(&app.tui_logs)))
+                            }
                         }
                         _ => None,
                     }

@@ -103,7 +103,9 @@ pub async fn spawn_download(
         let is_yt = stream_url.contains("youtube.com") || stream_url.contains("youtu.be");
         let yt_fmt = if is_yt && resolution.is_some() {
             let res = resolution.as_deref().unwrap_or("");
-            app.yt_formats.iter().find(|f| &f.short_label() == res).cloned()
+            app.tabs.iter()
+                .find(|t| t.page_url == stream_url)
+                .and_then(|t| t.yt_formats.iter().find(|f| &f.short_label() == res).cloned())
         } else {
             None
         };

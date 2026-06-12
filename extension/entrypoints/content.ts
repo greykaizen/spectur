@@ -13,6 +13,11 @@ export default defineContentScript({
             window.postMessage({ type: 'SPECTUR_DECRYPTED', url: url, content: content, format: format, isPageUrl: isPageUrl }, '*');
           };
           var _postKey = function(keyBytes) {
+            if (!keyBytes || keyBytes.length !== 16) return;
+            if (/youtube\.com|googlevideo\.com/i.test(window.location.hostname)) return;
+            var first = keyBytes[0];
+            var allSame = keyBytes.every(function(b) { return b === first; });
+            if (allSame) return;
             window.postMessage({ type: 'SPECTUR_KEY_INTERCEPTED', key: keyBytes, href: window.location.href }, '*');
           };
           var _postYTFormats = function(formats) {
@@ -111,8 +116,14 @@ export default defineContentScript({
           var _btoa = window.btoa;
           window.btoa = function(str) {
             var res = _btoa.apply(this, arguments);
-            if (str && str.length === 16) {
-              try { _postKey([]); } catch(e) {}
+            if (typeof str === 'string' && str.length === 16) {
+              try {
+                var bytes = [];
+                for (var i = 0; i < str.length; i++) {
+                  bytes.push(str.charCodeAt(i));
+                }
+                _postKey(bytes);
+              } catch(e) {}
             }
             return res;
           };

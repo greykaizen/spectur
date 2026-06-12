@@ -66,7 +66,8 @@ fn render_stream_list(frame: &mut Frame, area: Rect, state: &AppState) {
                 let stream_prefix = if stream_idx == state.selected_stream_index { " > " } else { "   " };
                 let format_str = match stream.format {
                     StreamFormat::Hls => "HLS", StreamFormat::Dash => "DASH",
-                    StreamFormat::Mp4 => "MP4", StreamFormat::Ts => "TS", StreamFormat::Unknown => "?",
+                    StreamFormat::Mp4 => "MP4", StreamFormat::Ts => "TS",
+                    StreamFormat::Youtube => "YT", StreamFormat::Unknown => "?",
                 };
                 let status = match &stream.probe_state {
                     ProbeState::Done(_) => "✓", ProbeState::Probing => "…", ProbeState::Failed(_) => "✗",
@@ -100,23 +101,26 @@ fn render_stream_list(frame: &mut Frame, area: Rect, state: &AppState) {
 fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
     let mut lines = Vec::new();
 
-    if !state.yt_formats.is_empty() {
+    let current_yt_formats: &[crate::types::YtFormat] = if state.tabs.is_empty() {
+        &[]
+    } else {
+        &state.tabs[state.selected_tab_index].yt_formats
+    };
+
+    if !current_yt_formats.is_empty() {
         lines.push(Line::from(vec![
             Span::styled("YouTube Formats Detected", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
         ]));
         lines.push(Line::from(""));
-        let video_formats: Vec<_> = state.yt_formats.iter().filter(|f| f.is_video()).collect();
-        let audio_formats: Vec<_> = state.yt_formats.iter().filter(|f| f.is_audio_only()).collect();
+        let video_formats: Vec<(usize, &crate::types::YtFormat)> = current_yt_formats.iter().enumerate().filter(|(_, f)| f.is_video()).collect();
+        let audio_formats: Vec<(usize, &crate::types::YtFormat)> = current_yt_formats.iter().enumerate().filter(|(_, f)| f.is_audio_only()).collect();
 
         if !video_formats.is_empty() {
             lines.push(Line::from(vec![Span::styled("Video (Tab→Up/Down to select, Enter to download):", Style::default().fg(Color::Cyan))]));
-            for (i, f) in video_formats.iter().enumerate() {
-                let prefix = if i + state.selected_yt_format_index >= state.yt_formats.len() || i != state.selected_yt_format_index % video_formats.len() {
-                    "   "
-                } else if state.focused_panel == Panel::Metadata { " > " } else { "   " };
-                let style = if state.focused_panel == Panel::Metadata 
-                    && i == state.selected_yt_format_index % video_formats.len() 
-                    && state.yt_formats.get(state.selected_yt_format_index).map(|f| f.is_video()).unwrap_or(false) {
+            for &(idx, f) in &video_formats {
+                let is_selected = state.focused_panel == Panel::Metadata && idx == state.selected_yt_format_index;
+                let prefix = if is_selected { " > " } else { "   " };
+                let style = if is_selected {
                     Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                 } else { Style::default() };
                 let mut detail = f.resolution_label();
@@ -130,13 +134,14 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
         }
         if !audio_formats.is_empty() {
             lines.push(Line::from(vec![Span::styled("Audio:", Style::default().fg(Color::Cyan))]));
-            for (i, f) in audio_formats.iter().enumerate() {
-                let prefix = if state.focused_panel == Panel::Metadata
-                    && i + video_formats.len() == state.selected_yt_format_index - video_formats.len() + video_formats.len() {
-                    " > "
-                } else { "   " };
+            for &(idx, f) in &audio_formats {
+                let is_selected = state.focused_panel == Panel::Metadata && idx == state.selected_yt_format_index;
+                let prefix = if is_selected { " > " } else { "   " };
+                let style = if is_selected {
+                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                } else { Style::default() };
                 let detail = format!("{} (itag {})", f.resolution_label(), f.itag);
-                lines.push(Line::from(vec![Span::raw(format!("{}{}", prefix, detail))]));
+                lines.push(Line::from(vec![Span::styled(format!("{}{}", prefix, detail), style)]));
             }
         }
         lines.push(Line::from(""));
@@ -152,10 +157,10 @@ fn render_metadata(frame: &mut Frame, area: Rect, state: &AppState) {
                     lines.push(Line::from(vec![
                         Span::raw("Format: "),
                         Span::styled(match stream.format {
-                            StreamFormat::Hls => "HLS Manifest", StreamFormat::Dash => "DASH MPD",
-                            StreamFormat::Mp4 => "MP4 Progressive", StreamFormat::Ts => "TS Segment",
-                            StreamFormat::Unknown => "Unknown",
-                        }, Style::default().fg(Color::Yellow)),
+                        StreamFormat::Hls => "HLS Manifest", StreamFormat::Dash => "DASH MPD",
+                        StreamFormat::Mp4 => "MP4 Progressive", StreamFormat::Ts => "TS Segment",
+                        StreamFormat::Youtube => "YouTube Video", StreamFormat::Unknown => "Unknown",
+                    }, Style::default().fg(Color::Yellow)),
                     ]));
                     lines.push(Line::from(""));
                 }
@@ -244,7 +249,7 @@ fn render_downloads(frame: &mut Frame, area: Rect, state: &AppState) {
     let [progress_area, log_area] =
         Layout::horizontal([Constraint::Fill(1), Constraint::Fill(1)]).areas(area);
     render_progress(frame, progress_area, state);
-    render_logs(frame, log_area, state);
+    render_download_logs(frame, log_area, state);
 }
 
 fn render_progress(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -252,14 +257,19 @@ fn render_progress(frame: &mut Frame, area: Rect, state: &AppState) {
     if state.downloads.is_empty() {
         lines.push(Line::from(vec![Span::styled("No active downloads", Style::default().fg(Color::DarkGray))]));
     } else {
-        for task in &state.downloads {
+        for (i, task) in state.downloads.iter().enumerate() {
             let (status_str, status_color) = match &task.status {
                 DownloadStatus::Queued => ("QUEUED", Color::Yellow),
                 DownloadStatus::Running => ("RUNNING", Color::Cyan),
                 DownloadStatus::Finished => ("DONE", Color::Green),
                 DownloadStatus::Failed(_) => ("FAILED", Color::Red),
             };
+            let prefix = if state.focused_panel == Panel::Downloads && i == state.selected_download_index { " > " } else { "   " };
+            let style = if state.focused_panel == Panel::Downloads && i == state.selected_download_index {
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+            } else { Style::default() };
             lines.push(Line::from(vec![
+                Span::styled(prefix, style),
                 Span::styled(format!("[{}]", status_str), Style::default().fg(status_color).add_modifier(Modifier::BOLD)),
                 Span::raw(format!(" #{}: {:>3}% {:.1}MB/s", task.id + 1, task.progress, task.speed_mbps)),
             ]));
@@ -273,16 +283,41 @@ fn render_progress(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_logs(frame: &mut Frame, area: Rect, state: &AppState) {
-    let log_lines: Vec<Line> = state.tui_logs.iter().rev().take(12).map(|l| {
-        if l.contains("error") || l.contains("Error") || l.contains("FAILED") {
-            Line::from(vec![Span::styled(l, Style::default().fg(Color::Red))])
-        } else if l.contains("complete") || l.contains("Done") {
-            Line::from(vec![Span::styled(l, Style::default().fg(Color::Green))])
-        } else {
-            Line::from(vec![Span::raw(l)])
+fn render_download_logs(frame: &mut Frame, area: Rect, state: &AppState) {
+    let mut log_lines = Vec::new();
+    if let Some(task) = state.downloads.get(state.selected_download_index) {
+        log_lines.push(Line::from(vec![
+            Span::styled(format!("Download #{} logs (last 50 lines):", task.id + 1), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        ]));
+        log_lines.push(Line::from(""));
+        
+        let start = if task.log_lines.len() > 50 { task.log_lines.len() - 50 } else { 0 };
+        for l in &task.log_lines[start..] {
+            if l.contains("error") || l.contains("Error") || l.contains("FAILED") || l.contains("failed") {
+                log_lines.push(Line::from(vec![Span::styled(l, Style::default().fg(Color::Red))]));
+            } else if l.contains("complete") || l.contains("Done") || l.contains("Finished") {
+                log_lines.push(Line::from(vec![Span::styled(l, Style::default().fg(Color::Green))]));
+            } else {
+                log_lines.push(Line::from(vec![Span::raw(l)]));
+            }
         }
-    }).collect();
+    } else {
+        // Fallback to displaying general TUI logs if no download is selected
+        log_lines.push(Line::from(vec![
+            Span::styled("System Logs:", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        ]));
+        log_lines.push(Line::from(""));
+        for l in state.tui_logs.iter().rev().take(12) {
+            if l.contains("error") || l.contains("Error") || l.contains("FAILED") {
+                log_lines.push(Line::from(vec![Span::styled(l, Style::default().fg(Color::Red))]));
+            } else if l.contains("complete") || l.contains("Done") {
+                log_lines.push(Line::from(vec![Span::styled(l, Style::default().fg(Color::Green))]));
+            } else {
+                log_lines.push(Line::from(vec![Span::raw(l)]));
+            }
+        }
+    }
+    
     let list = List::new(log_lines).block(Block::bordered().title(" Logs "));
     frame.render_widget(list, area);
 }
@@ -302,8 +337,12 @@ pub fn handle_events(state: &mut AppState) -> std::io::Result<Action> {
             KeyCode::Up => {
                 if state.focused_panel == Panel::Streams { state.prev_stream(); }
                 else if state.focused_panel == Panel::Metadata {
-                    if !state.yt_formats.is_empty() {
-                        let vf_count = state.yt_formats.iter().filter(|f| f.is_video()).count();
+                    let current_yt_formats: &[crate::types::YtFormat] = if state.tabs.is_empty() {
+                        &[]
+                    } else {
+                        &state.tabs[state.selected_tab_index].yt_formats
+                    };
+                    if !current_yt_formats.is_empty() {
                         if state.selected_yt_format_index > 0 {
                             state.selected_yt_format_index -= 1;
                         }
@@ -311,17 +350,31 @@ pub fn handle_events(state: &mut AppState) -> std::io::Result<Action> {
                         state.prev_resolution();
                     }
                 }
+                else if state.focused_panel == Panel::Downloads {
+                    if state.selected_download_index > 0 {
+                        state.selected_download_index -= 1;
+                    }
+                }
             }
             KeyCode::Down => {
                 if state.focused_panel == Panel::Streams { state.next_stream(); }
                 else if state.focused_panel == Panel::Metadata {
-                    if !state.yt_formats.is_empty() {
-                        let total = state.yt_formats.iter().filter(|f| f.is_video()).count();
-                        if state.selected_yt_format_index + 1 < total {
+                    let current_yt_formats: &[crate::types::YtFormat] = if state.tabs.is_empty() {
+                        &[]
+                    } else {
+                        &state.tabs[state.selected_tab_index].yt_formats
+                    };
+                    if !current_yt_formats.is_empty() {
+                        if state.selected_yt_format_index + 1 < current_yt_formats.len() {
                             state.selected_yt_format_index += 1;
                         }
                     } else {
                         state.next_resolution();
+                    }
+                }
+                else if state.focused_panel == Panel::Downloads {
+                    if state.selected_download_index + 1 < state.downloads.len() {
+                        state.selected_download_index += 1;
                     }
                 }
             }

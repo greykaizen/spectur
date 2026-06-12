@@ -99,12 +99,11 @@ pub struct KeyPayload {
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub intercepted_keys: Vec<KeyPayload>,
-    pub yt_formats: Vec<YtFormat>,
-    pub yt_page_url: Option<String>,
     pub selected_yt_format_index: usize,
     pub selected_tab_index: usize,
     pub selected_stream_index: usize,
     pub selected_resolution_index: usize,
+    pub selected_download_index: usize,
     pub tabs: Vec<TabSession>,
     pub downloads: Vec<DownloadTask>,
     pub tui_logs: Vec<String>,
@@ -117,6 +116,7 @@ pub struct TabSession {
     pub page_title: String,
     pub streams: Vec<CapturedStream>,
     pub show_noise: bool,
+    pub yt_formats: Vec<YtFormat>,
 }
 
 impl TabSession {
@@ -172,6 +172,7 @@ pub enum StreamFormat {
     Dash,
     Mp4,
     Ts,
+    Youtube,
     Unknown,
 }
 
@@ -298,12 +299,11 @@ impl AppState {
             selected_stream_index: 0,
             selected_resolution_index: 0,
             selected_yt_format_index: 0,
+            selected_download_index: 0,
             tabs: Vec::new(),
             downloads: Vec::new(),
             tui_logs: Vec::new(),
             intercepted_keys: Vec::new(),
-            yt_formats: Vec::new(),
-            yt_page_url: None,
             focused_panel: Panel::Streams,
         }
     }
@@ -376,6 +376,7 @@ impl AppState {
                 },
                 streams: vec![captured],
                 show_noise: false,
+                yt_formats: Vec::new(),
             });
             (idx, false)
         }

@@ -71,9 +71,44 @@ async fn handle_connection(
                                 if let Some(data) = &ws_msg.streaming_data {
                                     let formats = parse_yt_formats(data);
                                     let mut app = state.lock().await;
-                                    app.yt_formats = formats;
-                                    app.yt_page_url = ws_msg.page_url.clone();
-                                    app.tui_logs.push("YouTube formats parsed".into());
+                                    let page_url = ws_msg.page_url.clone().unwrap_or_else(|| "https://youtube.com/".to_string());
+                                    let page_title = ws_msg.page_title.clone().unwrap_or_else(|| "YouTube Video".to_string());
+                                    let tab_idx = if let Some(idx) = app.tabs.iter().position(|t| t.page_url == page_url) {
+                                        app.tabs[idx].yt_formats = formats;
+                                        idx
+                                    } else {
+                                        let idx = app.tabs.len();
+                                        app.tabs.push(crate::types::TabSession {
+                                            page_url: page_url.clone(),
+                                            page_title: page_title.clone(),
+                                            streams: Vec::new(),
+                                            show_noise: false,
+                                            yt_formats: formats,
+                                        });
+                                        idx
+                                    };
+                                    let tab = &mut app.tabs[tab_idx];
+                                    let has_yt_stream = tab.streams.iter().any(|s| s.format == crate::types::StreamFormat::Youtube);
+                                    if !has_yt_stream {
+                                        tab.streams.push(crate::types::CapturedStream {
+                                            url: page_url.clone(),
+                                            method: "GET".to_string(),
+                                            request_headers: std::collections::HashMap::new(),
+                                            server_ip: "".to_string(),
+                                            format: crate::types::StreamFormat::Youtube,
+                                            probe_state: crate::types::ProbeState::Done(crate::types::StreamMetadata {
+                                                duration_seconds: 0.0,
+                                                total_segments: 0,
+                                                resolutions: Vec::new(),
+                                                audio_tracks: Vec::new(),
+                                                keys: Vec::new(),
+                                                drm: Vec::new(),
+                                                segment_base_url: None,
+                                            }),
+                                            manifest_content: None,
+                                        });
+                                    }
+                                    app.tui_logs.push(format!("YouTube formats parsed for {}", page_title));
                                 }
                             } else if let Some(payload) = ws_msg.to_stream_payload() {
                                 let url = payload.url.clone();
