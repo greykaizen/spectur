@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use futures_util::StreamExt;
 
 use crate::types::{AppState, DrmInfo, KeyInfo, ResolutionInfo, StreamMetadata, StreamFormat};
 
@@ -464,158 +463,14 @@ fn classify_drm(cp: &dash_mpd::ContentProtection) -> String {
 }
 
 async fn parse_mp4(
-    url: &str,
-    headers: HashMap<String, String>,
+    _url: &str,
+    _headers: HashMap<String, String>,
 ) -> Result<(StreamMetadata, StreamFormat), Box<dyn std::error::Error + Send + Sync>> {
-    let client = wreq::Client::builder()
-        .emulation(wreq_util::Emulation::Firefox136)
-        .redirect(wreq::redirect::Policy::none())
-        .build()?;
-
-    let mut req_headers = headers.clone();
-    req_headers.insert("range".to_string(), "bytes=0-1048575".to_string());
-
-    let mut current_url = url.to_string();
-    let mut redirects_followed = 0;
-    const MAX_REDIRECTS: usize = 10;
-    
-    let mut total_size = 0u64;
-    let mut body_bytes = Vec::new();
-
-    loop {
-        let mut req = client.get(&current_url);
-        for (k, v) in &req_headers {
-            let k_lower = k.to_lowercase();
-            if k_lower == "host" || k_lower == "accept-encoding" || k_lower == "content-length" || k_lower == "connection" {
-                continue;
-            }
-            if let (Ok(name), Ok(value)) = (wreq::header::HeaderName::from_bytes(k.as_bytes()), wreq::header::HeaderValue::from_str(v)) {
-                req = req.header(name, value);
-            }
-        }
-
-        let resp = req.send().await?;
-        let status = resp.status();
-
-        if status.is_redirection() {
-            if redirects_followed >= MAX_REDIRECTS {
-                return Err("too many redirects".into());
-            }
-            if let Some(loc_val) = resp.headers().get("location") {
-                let loc_str = loc_val.to_str()?;
-                let base = url::Url::parse(&current_url)?;
-                let next_url = base.join(loc_str)?;
-                current_url = next_url.to_string();
-                redirects_followed += 1;
-                continue;
-            }
-        }
-
-        if !status.is_success() {
-            return Err(format!("HTTP error status: {}", status).into());
-        }
-
-        if let Some(cr_val) = resp.headers().get("content-range") {
-            if let Ok(cr_str) = cr_val.to_str() {
-                if let Some(slash_idx) = cr_str.rfind('/') {
-                    if let Ok(sz) = cr_str[slash_idx + 1..].trim().parse::<u64>() {
-                        total_size = sz;
-                    }
-                }
-            }
-        }
-        if total_size == 0 {
-            if let Some(cl_val) = resp.headers().get("content-length") {
-                if let Ok(cl_str) = cl_val.to_str() {
-                    if let Ok(sz) = cl_str.trim().parse::<u64>() {
-                        total_size = sz;
-                    }
-                }
-            }
-        }
-
-        let mut stream = resp.bytes_stream();
-        let mut total_downloaded = 0;
-        let limit = 1048576;
-        while let Some(item) = stream.next().await {
-            let chunk = item?;
-            let chunk_len = chunk.len();
-            if total_downloaded + chunk_len > limit {
-                let allowed = limit - total_downloaded;
-                body_bytes.extend_from_slice(&chunk[..allowed]);
-                break;
-            } else {
-                body_bytes.extend_from_slice(&chunk);
-                total_downloaded += chunk_len;
-            }
-        }
-        break;
-    }
-
-    if body_bytes.is_empty() {
-        return Err("empty body received".into());
-    }
-
-    let cursor = std::io::Cursor::new(body_bytes);
-    let size = if total_size > 0 { total_size } else { cursor.get_ref().len() as u64 };
-
-    let mp4_reader = match mp4::Mp4Reader::read_header(cursor, size) {
-        Ok(r) => r,
-        Err(_) => {
-            return Ok((StreamMetadata {
-                duration_seconds: 0.0,
-                total_segments: 1,
-                resolutions: Vec::new(),
-                audio_tracks: Vec::new(),
-                keys: Vec::new(),
-                drm: Vec::new(),
-                segment_base_url: None,
-            }, StreamFormat::Mp4));
-        }
-    };
-
-    let duration = if mp4_reader.moov.mvhd.timescale > 0 {
-        mp4_reader.moov.mvhd.duration as f32 / mp4_reader.moov.mvhd.timescale as f32
-    } else {
-        0.0
-    };
-
-    let mut resolutions = Vec::new();
-    let mut audio_tracks = Vec::new();
-
-    for track in mp4_reader.tracks().values() {
-        if let Ok(track_type) = track.track_type() {
-            match track_type {
-                mp4::TrackType::Video => {
-                    let w = track.trak.tkhd.width.value() as u32;
-                    let h = track.trak.tkhd.height.value() as u32;
-                    if w > 0 && h > 0 {
-                        let label = format!("{}x{}", w, h);
-                        if !resolutions.iter().any(|r: &ResolutionInfo| r.label == label) {
-                            resolutions.push(ResolutionInfo {
-                                label,
-                                bandwidth: 0,
-                                codecs: None,
-                                frame_rate: None,
-                                mime_type: None,
-                                url: None,
-                            });
-                        }
-                    }
-                }
-                mp4::TrackType::Audio => {
-                    audio_tracks.push(format!("Track {}", track.track_id()));
-                }
-                _ => {}
-            }
-        }
-    }
-
     Ok((StreamMetadata {
-        duration_seconds: duration,
+        duration_seconds: 0.0,
         total_segments: 1,
-        resolutions,
-        audio_tracks,
+        resolutions: Vec::new(),
+        audio_tracks: Vec::new(),
         keys: Vec::new(),
         drm: Vec::new(),
         segment_base_url: None,

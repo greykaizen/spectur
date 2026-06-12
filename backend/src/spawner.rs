@@ -66,6 +66,43 @@ pub async fn spawn_yt_format_download(
     }
 }
 
+fn clean_filename(filename: &str, format: &crate::types::StreamFormat) -> String {
+    let has_video_ext = filename.ends_with(".mp4")
+        || filename.ends_with(".mkv")
+        || filename.ends_with(".webm")
+        || filename.ends_with(".ts")
+        || filename.ends_with(".mov")
+        || filename.ends_with(".avi")
+        || filename.ends_with(".mp3")
+        || filename.ends_with(".m4a")
+        || filename.ends_with(".aac");
+
+    if has_video_ext {
+        return filename.to_string();
+    }
+
+    let mut name = filename.to_string();
+    if name.ends_with(".html") || name.ends_with(".htm") || name.ends_with(".js") || name.ends_with(".css") || name.ends_with(".txt") {
+        if let Some(pos) = name.rfind('.') {
+            name.truncate(pos);
+        }
+    }
+
+    match format {
+        crate::types::StreamFormat::Hls | crate::types::StreamFormat::Dash => {
+            name
+        }
+        crate::types::StreamFormat::Ts => {
+            name.push_str(".ts");
+            name
+        }
+        _ => {
+            name.push_str(".mp4");
+            name
+        }
+    }
+}
+
 pub async fn spawn_download(
     state: Arc<Mutex<AppState>>,
     stream_url: String,
@@ -75,37 +112,7 @@ pub async fn spawn_download(
     let output_dir = "/tmp/spectur-downloads";
     let _ = std::fs::create_dir_all(output_dir);
 
-    let filename = stream_url
-        .split('/')
-        .last()
-        .unwrap_or("download")
-        .split('?')
-        .next()
-        .unwrap_or("download");
-
-    let output_path = if is_test {
-        format!("{}/{}_test", output_dir, filename)
-    } else {
-        format!("{}/{}", output_dir, filename)
-    };
-
-    let task_id: usize;
-    {
-        let mut app = state.lock().await;
-        task_id = app.downloads.len();
-        app.downloads.push(crate::types::DownloadTask {
-            id: task_id,
-            stream_url: stream_url.clone(),
-            output_path: output_path.clone(),
-            progress: 0,
-            speed_mbps: 0.0,
-            log_lines: Vec::new(),
-            status: DownloadStatus::Running,
-        });
-        app.tui_logs.push(format!("Starting{} download: {}", if is_test { " test" } else { "" }, stream_url));
-    }
-
-    let (request_headers, keys, is_yt, yt_format) = {
+    let (request_headers, keys, is_yt, yt_format, format) = {
         let app = state.lock().await;
         
         let mut matching_tab = None;
@@ -132,6 +139,7 @@ pub async fn spawn_download(
         } else {
             None
         };
+        let format = matching_stream.as_ref().map(|s| s.format.clone()).unwrap_or(crate::types::StreamFormat::Unknown);
 
         let mut final_headers = headers;
         let has_ua = final_headers.keys().any(|k| k.to_lowercase() == "user-agent");
@@ -155,13 +163,54 @@ pub async fn spawn_download(
             }
         }
 
-        (final_headers, keys, is_yt, yt_fmt)
+        (final_headers, keys, is_yt, yt_fmt, format)
     };
+
+    let filename = stream_url
+        .split('/')
+        .last()
+        .unwrap_or("download")
+        .split('?')
+        .next()
+        .unwrap_or("download");
+
+    let cleaned_name = clean_filename(filename, &format);
+    let base_name: String;
+    let ext: String;
+    if let Some(pos) = cleaned_name.rfind('.') {
+        base_name = cleaned_name[..pos].to_string();
+        ext = cleaned_name[pos..].to_string();
+    } else {
+        base_name = cleaned_name;
+        ext = String::new();
+    }
+
+    let output_path = if is_test {
+        format!("{}/{}_test{}", output_dir, base_name, ext)
+    } else {
+        format!("{}/{}{}", output_dir, base_name, ext)
+    };
+
+    let task_id: usize;
+    {
+        let mut app = state.lock().await;
+        task_id = app.downloads.len();
+        app.downloads.push(crate::types::DownloadTask {
+            id: task_id,
+            stream_url: stream_url.clone(),
+            output_path: output_path.clone(),
+            progress: 0,
+            speed_mbps: 0.0,
+            log_lines: Vec::new(),
+            status: DownloadStatus::Running,
+        });
+        app.tui_logs.push(format!("Starting{} download: {}", if is_test { " test" } else { "" }, stream_url));
+    }
 
     let result = if is_yt {
         spawn_yt_download(&stream_url, &output_path, state.clone(), task_id, yt_format, is_test).await
     } else {
-        run_downloader(&stream_url, &output_path, state.clone(), task_id, resolution, request_headers, keys, is_test).await
+        run_downloader(&stream_url, &output_path, state.clone(), task_id, resolution, request_headers, keys, is_test, format).await
     };
 
     let mut app = state.lock().await;
@@ -223,8 +272,9 @@ async fn run_downloader(
     headers: std::collections::HashMap<String, String>,
     keys: Vec<crate::types::KeyInfo>,
     is_test: bool,
+    format: crate::types::StreamFormat,
 ) -> Result<(), String> {
-    let tool = select_downloader(url);
+    let tool = select_downloader(url, &format);
     let args = build_args(&tool, url, output_path, resolution, &headers, &keys, is_test);
 
     spawn_and_stream(tool.binary, &args, state, task_id).await
@@ -300,12 +350,22 @@ struct Downloader {
     binary: &'static str,
 }
 
-fn select_downloader(url: &str) -> Downloader {
-    let lower = url.to_lowercase();
-    if lower.contains(".m3u8") || lower.contains(".mpd") {
-        Downloader { binary: "N_m3u8DL-RE" }
-    } else {
-        Downloader { binary: "aria2c" }
+fn select_downloader(url: &str, format: &crate::types::StreamFormat) -> Downloader {
+    match format {
+        crate::types::StreamFormat::Hls | crate::types::StreamFormat::Dash => {
+            Downloader { binary: "N_m3u8DL-RE" }
+        }
+        crate::types::StreamFormat::Mp4 | crate::types::StreamFormat::Ts => {
+            Downloader { binary: "aria2c" }
+        }
+        _ => {
+            let lower = url.to_lowercase();
+            if lower.contains(".m3u8") || lower.contains(".mpd") {
+                Downloader { binary: "N_m3u8DL-RE" }
+            } else {
+                Downloader { binary: "aria2c" }
+            }
+        }
     }
 }
 
@@ -368,9 +428,14 @@ fn build_args(
             }
         }
         "aria2c" => {
+            let path = std::path::Path::new(output_path);
+            let parent = path.parent().and_then(|p| p.to_str()).unwrap_or("/tmp/spectur-downloads");
+            let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("download.mp4");
             args.push(url.to_string());
             args.push("-d".into());
-            args.push(output_path.to_string());
+            args.push(parent.to_string());
+            args.push("-o".into());
+            args.push(file_name.to_string());
             args.push("--continue=true".into());
             args.push("-x16".into());
             args.push("-s16".into());
