@@ -403,6 +403,9 @@ export default defineBackground(() => {
         }));
       }
     }
+    if (message.action === 'getPlatformInfo') {
+      return browser.runtime.getPlatformInfo();
+    }
   });
 
   connectWebSocket();
