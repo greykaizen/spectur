@@ -10,10 +10,10 @@ export default defineConfig({
       'webRequest',
       'tabs',
       '<all_urls>',
-      'http://127.0.0.1:8080/*',
-      'ws://127.0.0.1:8080/*',
-      'http://localhost:8080/*',
-      'ws://localhost:8080/*'
+      'http://127.0.0.1:9117/*',
+      'ws://127.0.0.1:9117/*',
+      'http://localhost:9117/*',
+      'ws://localhost:9117/*'
     ]
   },
   vite: () => ({
