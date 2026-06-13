@@ -8,3 +8,4 @@ plan/
 **/package-lock.json
 notes/
 .env
+.commandcode/
