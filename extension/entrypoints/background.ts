@@ -406,6 +406,20 @@ export default defineBackground(() => {
     if (message.action === 'getPlatformInfo') {
       return browser.runtime.getPlatformInfo();
     }
+    if (message.action === 'sendCoordinates') {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(JSON.stringify({
+            type: 'videoCoordinates',
+            pageUrl: sender.tab?.url || '',
+            pageTitle: sender.tab?.title || '',
+            tabId: sender.tab?.id,
+            ...message.coordinates,
+            timestamp: Date.now()
+          }));
+        } catch (_) {}
+      }
+    }
   });
 
   connectWebSocket();
