@@ -123,7 +123,7 @@ async fn handle_connection(
                                 let manifest_content = payload.manifest_content.clone();
 
                                 let mut app = state.lock().await;
-                                let (tab_idx, stream_id, exists) = app.add_stream(payload);
+                                let (_, stream_id, exists) = app.add_stream(payload);
 
                                 if !exists {
                                     let analyzer_state = Arc::clone(&state);

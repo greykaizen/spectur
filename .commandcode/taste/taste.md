@@ -19,3 +19,9 @@
 # extension-architecture
 - Study cat-catch and stream-detector as reference implementations — the extension should capture complete auth context (cookies, headers, tokens) browser-side and pass it as a ready-to-use package to Rust. Rust's role is just to run the download with the already-prepared auth. Confidence: 0.70
 - Firefox webRequest details objects are immutable per-stage copies — use Map<requestId, Buffer> to share state across onBeforeRequest/onBeforeSendHeaders/onHeadersReceived/onBeforeRedirect/onCompleted instead of mutating the details object. Confidence: 0.75
+
+# communication
+- When asked for thoughts on architecture or strategy, provide analysis without code first — the user wants the reasoning before seeing any implementation. Confidence: 0.75
+
+# workflow
+- Stay anchored in the current phase of work — avoid re-litigating past architectural discussions or referencing stale context from earlier phases unless the user explicitly brings it back. Confidence: 0.70

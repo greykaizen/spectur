@@ -1,14 +1,9 @@
-mod analyzer;
-mod spawner;
-mod types;
-mod ui;
-mod ws;
-
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::types::AppState;
-use crate::ui::Action;
+use spectur::{analyzer, spawner, ui, ws};
+use spectur::types::AppState;
+use spectur::ui::Action;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -37,12 +32,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let selection = {
                     let app = state.lock().await;
                     // YT format download: use yt-dlp with itag directly
-                    let current_yt_formats: &[crate::types::YtFormat] = if app.tabs.is_empty() {
+                    let current_yt_formats: &[spectur::types::YtFormat] = if app.tabs.is_empty() {
                         &[]
                     } else {
                         &app.tabs[app.selected_tab_index].yt_formats
                     };
-                    if !current_yt_formats.is_empty() && app.focused_panel == crate::types::Panel::Metadata {
+                    if !current_yt_formats.is_empty() && app.focused_panel == spectur::types::Panel::Metadata {
                         let yt_fmt = current_yt_formats.get(app.selected_yt_format_index).cloned();
                         let yt_url = app.tabs.get(app.selected_tab_index).map(|t| t.page_url.clone());
                         drop(app);
@@ -58,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let stream = app.selected_stream();
                     stream.map(|s| {
                         let (has_metadata, resolution) = match &s.probe_state {
-                            crate::types::ProbeState::Done(meta) => {
+                            spectur::types::ProbeState::Done(meta) => {
                                 let res = meta.resolutions.get(app.selected_resolution_index).map(|res| res.label.clone());
                                 (true, res)
                             }
@@ -93,10 +88,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let text_to_copy = {
                     let app = state.lock().await;
                     match app.focused_panel {
-                        crate::types::Panel::Metadata => {
+                        spectur::types::Panel::Metadata => {
                             app.selected_stream().map(|s| format_metadata_for_copy(s, app.selected_resolution_index))
                         }
-                        crate::types::Panel::Downloads => {
+                        spectur::types::Panel::Downloads => {
                             if app.downloads.is_empty() {
                                 Some(format_logs_for_copy(&app.tui_logs))
                             } else {
@@ -161,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn format_metadata_for_copy(stream: &crate::types::CapturedStream, selected_resolution_index: usize) -> String {
+fn format_metadata_for_copy(stream: &spectur::types::CapturedStream, selected_resolution_index: usize) -> String {
     let mut s = String::new();
     s.push_str(&format!("URL: {}\n", stream.url));
     s.push_str(&format!("Method: {}\n", stream.method));
@@ -173,13 +168,13 @@ fn format_metadata_for_copy(stream: &crate::types::CapturedStream, selected_reso
     }
     s.push_str("Probe State: ");
     match &stream.probe_state {
-        crate::types::ProbeState::Probing => {
+        spectur::types::ProbeState::Probing => {
             s.push_str("Probing...\n");
         }
-        crate::types::ProbeState::Failed(err) => {
+        spectur::types::ProbeState::Failed(err) => {
             s.push_str(&format!("Failed: {}\n", err));
         }
-        crate::types::ProbeState::Done(meta) => {
+        spectur::types::ProbeState::Done(meta) => {
             s.push_str("Done\n");
             s.push_str(&format!("  Duration: {}s\n", meta.duration_seconds));
             if let Some(bytes) = meta.size_bytes {
