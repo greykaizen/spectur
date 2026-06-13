@@ -51,14 +51,14 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   style.textContent = `
     .download-btn {
       position: absolute;
-      /* Positioned OUTSIDE the video frame: shifted up above the top-right corner */
-      top: -32px;
+      /* Rest exactly on the top edge of the video frame */
+      bottom: 100%;
       right: 0px;
       
       display: flex;
       align-items: center;
-      gap: 5px;
-      padding: 4px 6px;
+      gap: 4px;
+      padding: 0;
       margin: 0;
       border-radius: 4px;
       
@@ -100,7 +100,7 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     }
 
     .logo-img {
-      width: 18px; /* Increased size to zoom/enhance visibility */
+      width: 18px;
       height: 18px;
       margin: 0;
       padding: 0;
@@ -110,9 +110,9 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     }
 
     .btn-text {
-      margin: 0 2px 0 0;
+      margin: 0 1px 0 0;
       padding: 0;
-      line-height: 1;
+      line-height: 18px; /* Match logo height for absolute vertical alignment */
       display: inline-block;
     }
 
@@ -120,8 +120,8 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 14px;
-      height: 14px;
+      width: 18px; /* Matches logo height for a balanced, symmetric appearance */
+      height: 18px;
       border-radius: 3px;
       color: inherit;
       opacity: 0.6;
@@ -130,9 +130,9 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
       transition: all 0.2s;
       cursor: pointer;
       box-sizing: border-box;
-      margin: 0 0 0 2px;
+      margin: 0;
       padding: 0;
-      line-height: 1;
+      line-height: 18px;
     }
 
     .close-btn:hover {
@@ -203,6 +203,7 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     
     button.style.left = `${initialLeft}px`;
     button.style.top = `${initialTop}px`;
+    button.style.bottom = 'auto';
     button.style.right = 'auto';
     button.style.cursor = 'grabbing';
     
