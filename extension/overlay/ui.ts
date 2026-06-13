@@ -2,13 +2,10 @@
  * UI components for drawing the isolated Shadow DOM action button.
  */
 
-// Helper to check if the host page is in dark mode
 function isDarkMode(): boolean {
-  // 1. Check media query
   const mq = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   if (mq) return true;
 
-  // 2. Check YouTube specific or general DOM attributes
   const htmlEl = document.documentElement;
   if (htmlEl.hasAttribute('dark') || htmlEl.getAttribute('theme') === 'dark') {
     return true;
@@ -34,7 +31,7 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     top: '0px',
     width: '0px',
     height: '0px',
-    zIndex: '2147483647', // Max possible z-index
+    zIndex: '2147483647',
     pointerEvents: 'none',
     boxSizing: 'border-box',
     margin: '0',
@@ -44,7 +41,6 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   // Attach open Shadow Root for style isolation
   const shadow = host.attachShadow({ mode: 'open' });
 
-  // Get logo assets using browser extension API
   const isDark = isDarkMode();
   const logoUrl = browser.runtime.getURL(
     isDark ? 'icons/whitex256.png' : 'icons/blackx256.png'
@@ -55,25 +51,30 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   style.textContent = `
     .download-btn {
       position: absolute;
-      top: 12px;
-      right: 12px;
+      /* Positioned OUTSIDE the video frame: shifted up above the top-right corner */
+      top: -32px;
+      right: 0px;
+      
       display: flex;
       align-items: center;
-      gap: 6px;
-      padding: 5px 8px;
-      border-radius: 6px;
+      gap: 5px;
+      padding: 4px 6px;
+      margin: 0;
+      border-radius: 4px;
+      
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-      font-size: 12px;
+      font-size: 11px;
       font-weight: 600;
       cursor: grab;
       pointer-events: auto; /* Active pointer events for clicking/dragging */
       user-select: none;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-      transition: background-color 0.2s, border-color 0.2s, transform 0.1s;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      transition: background-color 0.2s, border-color 0.2s;
       backdrop-filter: blur(8px);
       -webkit-backdrop-filter: blur(8px);
       box-sizing: border-box;
       line-height: 1;
+      white-space: nowrap;
     }
 
     /* Dark theme styles */
@@ -99,32 +100,39 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     }
 
     .logo-img {
-      width: 14px;
-      height: 14px;
+      width: 18px; /* Increased size to zoom/enhance visibility */
+      height: 18px;
+      margin: 0;
+      padding: 0;
       object-fit: contain;
       pointer-events: none;
+      display: block;
     }
 
     .btn-text {
-      pointer-events: none;
-      margin-right: 2px;
+      margin: 0 2px 0 0;
+      padding: 0;
+      line-height: 1;
+      display: inline-block;
     }
 
     .close-btn {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 16px;
-      height: 16px;
-      border-radius: 4px;
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
       color: inherit;
-      opacity: 0.65;
+      opacity: 0.6;
       font-weight: 700;
-      font-size: 11px;
+      font-size: 10px;
       transition: all 0.2s;
       cursor: pointer;
       box-sizing: border-box;
-      margin-left: 2px;
+      margin: 0 0 0 2px;
+      padding: 0;
+      line-height: 1;
     }
 
     .close-btn:hover {
@@ -134,7 +142,7 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     }
   `;
 
-  // Create the sleek button
+  // Create the button
   const button = document.createElement('div');
   button.className = `download-btn ${isDark ? 'theme-dark' : 'theme-light'}`;
   
@@ -152,7 +160,7 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   // Close Button
   const close = document.createElement('span');
   close.className = 'close-btn';
-  close.innerHTML = '&#x2715;'; // Sleek multiplication cross (✕)
+  close.innerHTML = '&#x2715;';
 
   // Assemble
   button.appendChild(logo);
@@ -162,17 +170,15 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   shadow.appendChild(style);
   shadow.appendChild(button);
 
-  // Close handler: Dismiss the button
+  // Close handler
   close.addEventListener('click', (e) => {
     e.stopPropagation();
     host.style.display = 'none';
-    console.log('[Spectur Overlay] Overlay dismissed by user.');
   });
 
   // Action click handler
   button.addEventListener('click', () => {
     console.log('[Spectur Overlay] Action trigger: Download with tur clicked for video:', video.src);
-    // Future integration hook: notify content.ts to schedule download
   });
 
   // Drag and Drop Logic
@@ -183,7 +189,6 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   let initialTop = 0;
 
   button.addEventListener('mousedown', (e) => {
-    // Check if close button was clicked
     if (e.target === close) return;
     
     isDragging = true;
@@ -198,10 +203,9 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
     
     button.style.left = `${initialLeft}px`;
     button.style.top = `${initialTop}px`;
-    button.style.right = 'auto'; // Disable default right constraints during drag
+    button.style.right = 'auto';
     button.style.cursor = 'grabbing';
     
-    // Attach window listeners to capture smooth movement outside the button area
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     
