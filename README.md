@@ -5,6 +5,9 @@
 
 `spectur` is the browser interceptor and stream-resolving companion for the **tur** download suite. It intercepts media requests browser-side, extracts segment/stream lists from manifests (HLS/DASH/Progressive), and interfaces directly with download engines.
 
+> [!NOTE]
+> **Important Update**: The Rust backend code has been moved to the `tur-rs` workspace. See [tur-rs/spectur](https://github.com/greykaizen/tur-rs/tree/main/spectur). This repository now only contains the browser extension code.
+
 ---
 
 ## The `tur` Family Ecosystem
