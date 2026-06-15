@@ -6,6 +6,21 @@ export default defineConfig({
     version: '1.0.0',
     description: 'Real-time media stream sniffer and context relay.',
     manifest_version: 2,
+    icons: {
+      '16': 'icons/whitex256.png',
+      '32': 'icons/whitex256.png',
+      '48': 'icons/whitex256.png',
+      '128': 'icons/whitex256.png',
+    },
+    action: {
+      default_icon: {
+        '16': 'icons/whitex256.png',
+        '32': 'icons/whitex256.png',
+        '48': 'icons/whitex256.png',
+        '128': 'icons/whitex256.png',
+      },
+      default_title: 'Spectur Network Grabber',
+    },
     permissions: [
       'webRequest',
       'tabs',

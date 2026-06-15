@@ -48,9 +48,7 @@ export function createOverlay(video: HTMLVideoElement): HTMLElement {
   const shadow = host.attachShadow({ mode: "open" });
 
   const isDark = isDarkMode();
-  const logoUrl = browser.runtime.getURL(
-    isDark ? 'icons/no-bgx256.png' : 'icons/blackx256.png'
-  );
+  const logoUrl = browser.runtime.getURL('icons/no-bgx256.png');
 
   // Add Stylesheet inside Shadow DOM
   const style = document.createElement("style");
