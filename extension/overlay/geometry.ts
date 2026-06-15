@@ -56,8 +56,10 @@ export function setupPositionTracker(
   window.addEventListener('scroll', handleViewportChange, { capture: true, passive: true });
   document.addEventListener('fullscreenchange', handleViewportChange, { passive: true });
 
-  // Fallback polling for layout changes not caught by observers/listeners
-  const pollInterval = setInterval(syncPosition, 1000);
+  // Fallback polling for layout changes not caught by observers/listeners, wrapped in requestAnimationFrame
+  const pollInterval = setInterval(() => {
+    requestAnimationFrame(syncPosition);
+  }, 1000);
 
   function cleanup() {
     clearInterval(pollInterval);

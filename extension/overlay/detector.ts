@@ -9,38 +9,52 @@ export function observeVideos(
   const observedVideos = new Set<HTMLVideoElement>();
   const activeShadowObservers = new Map<ShadowRoot, MutationObserver>();
 
-  // Pierces Shadow DOM to discover videos
-  function scan(root: ParentNode) {
-    if (!root) return;
+  // Optimized Element-only recursive tree walker (O(N) traversal)
+  function scan(node: Node) {
+    if (!node) return;
 
-    // 1. Direct video search
-    const videos = root.querySelectorAll('video');
-    videos.forEach((video) => {
-      if (!observedVideos.has(video)) {
-        observedVideos.add(video);
-        onVideoAdded(video);
+    const type = node.nodeType;
+    // Walk only Element, Document, and ShadowRoot (DocumentFragment) nodes
+    if (
+      type !== Node.ELEMENT_NODE &&
+      type !== Node.DOCUMENT_NODE &&
+      type !== Node.DOCUMENT_FRAGMENT_NODE
+    ) {
+      return;
+    }
+
+    if (type === Node.ELEMENT_NODE) {
+      const el = node as Element;
+      if (el.tagName === 'VIDEO') {
+        const video = el as HTMLVideoElement;
+        if (!observedVideos.has(video)) {
+          observedVideos.add(video);
+          onVideoAdded(video);
+        }
       }
-    });
-
-    // 2. Traversal & Shadow Root Piercing
-    // Look at all elements in this subtree
-    const elements = root.querySelectorAll('*');
-    elements.forEach((el) => {
       if (el.shadowRoot) {
-        // Scan the shadow root recursively
         scan(el.shadowRoot);
-        
-        // Observe changes inside this shadow root if we aren't already
         setupShadowObserver(el.shadowRoot);
       }
-    });
+    }
+
+    // Recurse into children
+    let child = node.firstChild;
+    while (child) {
+      scan(child);
+      child = child.nextSibling;
+    }
   }
 
   function setupShadowObserver(shadowRoot: ShadowRoot) {
     if (activeShadowObservers.has(shadowRoot)) return;
 
-    const observer = new MutationObserver(() => {
-      scan(shadowRoot);
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          scan(node);
+        });
+      });
       pruneRemovedVideos();
     });
 
@@ -54,14 +68,11 @@ export function observeVideos(
 
   function pruneRemovedVideos() {
     for (const video of observedVideos) {
-      // Check if video is still present in the document
       let isAttached = false;
       
-      // Check document body or active shadow roots
       if (document.contains(video)) {
         isAttached = true;
       } else {
-        // Search inside observed shadow roots
         for (const [shadow] of activeShadowObservers) {
           if (shadow.contains(video)) {
             isAttached = true;
@@ -79,18 +90,11 @@ export function observeVideos(
 
   // MutationObserver for document.documentElement
   const mainObserver = new MutationObserver((mutations) => {
-    let shouldScan = false;
-    
-    for (const mutation of mutations) {
-      if (mutation.addedNodes.length > 0) {
-        shouldScan = true;
-        break;
-      }
-    }
-    
-    if (shouldScan) {
-      scan(document);
-    }
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
+        scan(node);
+      });
+    });
     pruneRemovedVideos();
   });
 
@@ -103,10 +107,12 @@ export function observeVideos(
   // Run initial scan
   scan(document);
 
-  // Poll fallback for dynamic SPAs (e.g. YouTube virtual navigations)
+  // Poll fallback for dynamic SPAs, wrapped in requestAnimationFrame to prevent layout thrashing
   const pollInterval = setInterval(() => {
-    scan(document);
-    pruneRemovedVideos();
+    requestAnimationFrame(() => {
+      scan(document);
+      pruneRemovedVideos();
+    });
   }, 1500);
 
   function cleanup() {
@@ -115,7 +121,6 @@ export function observeVideos(
     activeShadowObservers.forEach((obs) => obs.disconnect());
     activeShadowObservers.clear();
     
-    // Cleanup any lingering overlays
     observedVideos.forEach((video) => {
       onVideoRemoved(video);
     });
