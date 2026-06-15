@@ -2,33 +2,33 @@ import { defineConfig } from 'wxt';
 
 export default defineConfig({
   manifest: {
-    name: 'Spectur Network Grabber',
+    name: 'Spectur',
     version: '1.0.0',
-    description: 'Real-time media stream sniffer and context relay.',
+    description: 'Browser companion for the Tur download suite. Detects and transfers media stream contexts.',
     manifest_version: 2,
     icons: {
-      '16': 'icons/whitex256.png',
-      '32': 'icons/whitex256.png',
-      '48': 'icons/whitex256.png',
-      '128': 'icons/whitex256.png',
+      '16': 'icons/pebble180nobg.png',
+      '32': 'icons/pebble180nobg.png',
+      '48': 'icons/pebble180nobg.png',
+      '128': 'icons/pebble180nobg.png',
     },
     action: {
       default_icon: {
-        '16': 'icons/whitex256.png',
-        '32': 'icons/whitex256.png',
-        '48': 'icons/whitex256.png',
-        '128': 'icons/whitex256.png',
+        '16': 'icons/pebble180nobg.png',
+        '32': 'icons/pebble180nobg.png',
+        '48': 'icons/pebble180nobg.png',
+        '128': 'icons/pebble180nobg.png',
       },
-      default_title: 'Spectur Network Grabber',
+      default_title: 'Spectur',
     },
     permissions: [
       'webRequest',
       'tabs',
       '<all_urls>',
-      'http://127.0.0.1:9117/*',
-      'ws://127.0.0.1:9117/*',
-      'http://localhost:9117/*',
-      'ws://localhost:9117/*'
+      'http://127.0.0.1:6236/*',
+      'ws://127.0.0.1:6236/*',
+      'http://localhost:6236/*',
+      'ws://localhost:6236/*'
     ]
   },
   vite: () => ({

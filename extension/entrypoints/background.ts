@@ -22,7 +22,7 @@ interface KeyPayload {
 }
 
 export default defineBackground(() => {
-  const WS_URL = 'ws://127.0.0.1:9117';
+  const WS_URL = 'ws://127.0.0.1:6236';
   const MEDIA_EXTENSIONS = /\.(m3u8|mpd|mp4|m4s|m4v|webm|mov|f4m|f4f)(\?|$)/i;
   const MEDIA_MIME_TYPES = [
     'application/vnd.apple.mpegurl',
