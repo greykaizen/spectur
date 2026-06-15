@@ -71,12 +71,57 @@ export default defineBackground(() => {
     return MEDIA_MIME_TYPES.some(t => lower.startsWith(t.toLowerCase()));
   }
 
+  const messageQueue: string[] = [];
+
+  function sendWsMessage(msg: any): void {
+    const serialized = JSON.stringify(msg);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(serialized);
+      } catch (_) {
+        queueMessage(serialized);
+        connectWebSocket();
+      }
+    } else {
+      queueMessage(serialized);
+      connectWebSocket();
+    }
+  }
+
+  function queueMessage(serialized: string): void {
+    messageQueue.push(serialized);
+    if (messageQueue.length > 100) {
+      messageQueue.shift();
+    }
+  }
+
   function connectWebSocket(): void {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-    try { ws = new WebSocket(WS_URL); } catch { scheduleReconnect(); return; }
-    ws.onopen = () => { reconnectDelay = 1000; };
-    ws.onerror = () => { ws?.close(); };
-    ws.onclose = () => { ws = null; scheduleReconnect(); };
+    try {
+      const socket = new WebSocket(WS_URL);
+      ws = socket;
+
+      socket.onopen = () => {
+        reconnectDelay = 1000;
+        // Flush queued messages on successful connection
+        while (messageQueue.length > 0) {
+          const msg = messageQueue.shift();
+          if (msg) {
+            try { socket.send(msg); } catch (_) {}
+          }
+        }
+      };
+
+      socket.onerror = () => { socket.close(); };
+      socket.onclose = () => {
+        if (ws === socket) {
+          ws = null;
+        }
+        scheduleReconnect();
+      };
+    } catch {
+      scheduleReconnect();
+    }
   }
 
   function scheduleReconnect(): void {
@@ -86,22 +131,6 @@ export default defineBackground(() => {
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
       connectWebSocket();
     }, reconnectDelay);
-  }
-
-  function sendPayload(payload: StreamPayload): void {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
-    } else {
-      connectWebSocket();
-    }
-  }
-
-  function sendKeyPayload(payload: KeyPayload): void {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'keyIntercepted', ...payload }));
-    } else {
-      connectWebSocket();
-    }
   }
 
   function headersToRecord(headers: { name: string; value?: string }[] | undefined): Record<string, string> {
@@ -233,7 +262,7 @@ export default defineBackground(() => {
         timestamp: Date.now(),
         manifestContent: entry.manifestContent,
       };
-      sendPayload(payload);
+      sendWsMessage(payload);
       activeRequests.delete(details.requestId);
     },
     { urls: ['<all_urls>'] }
@@ -258,7 +287,7 @@ export default defineBackground(() => {
             timestamp: Date.now(),
             manifestContent: entry.manifestContent,
           };
-          sendPayload(payload);
+          sendWsMessage(payload);
           activeRequests.delete(details.requestId);
         }).catch(() => {
           activeRequests.delete(details.requestId);
@@ -284,17 +313,15 @@ export default defineBackground(() => {
       // The content script fetch hook handles body extraction in MAIN world.
       // This listener ensures consistent pageUrl/pageTitle context.
       const pageUrl = details.originUrl || details.initiator || '';
-      if (ws && ws.readyState === WebSocket.OPEN && pageUrl) {
-        try {
-          ws.send(JSON.stringify({
-            type: 'youtubePlayerRequest',
-            url: details.url,
-            pageUrl,
-            responseHeaders: headersToRecord(details.responseHeaders),
-            requestHeaders: {},
-            timestamp: Date.now()
-          }));
-        } catch (_) {}
+      if (pageUrl) {
+        sendWsMessage({
+          type: 'youtubePlayerRequest',
+          url: details.url,
+          pageUrl,
+          responseHeaders: headersToRecord(details.responseHeaders),
+          requestHeaders: {},
+          timestamp: Date.now()
+        });
       }
     },
     { urls: ['*://*.youtube.com/youtubei/v1/*'] },
@@ -374,51 +401,46 @@ export default defineBackground(() => {
         timestamp: Date.now(),
         manifestContent: message.content
       };
-      sendPayload(payload);
+      sendWsMessage(payload);
     }
 
     if (message.action === 'keyIntercepted') {
       const pageUrl = sender.tab?.url || '';
       const pageTitle = sender.tab?.title || '';
-      const keyPayload: KeyPayload = {
+      const keyPayload = {
+        type: 'keyIntercepted',
         key: message.key,
         href: message.href || pageUrl,
         pageUrl,
         pageTitle,
         timestamp: Date.now(),
       };
-      sendKeyPayload(keyPayload);
+      sendWsMessage(keyPayload);
     }
 
     if (message.action === 'youtubeFormats') {
       const pageUrl = sender.tab?.url || '';
       const pageTitle = sender.tab?.title || '';
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'youtubeFormats',
-          pageUrl,
-          pageTitle,
-          streamingData: message.streamingData,
-          timestamp: Date.now()
-        }));
-      }
+      sendWsMessage({
+        type: 'youtubeFormats',
+        pageUrl,
+        pageTitle,
+        streamingData: message.streamingData,
+        timestamp: Date.now()
+      });
     }
     if (message.action === 'getPlatformInfo') {
       return browser.runtime.getPlatformInfo();
     }
     if (message.action === 'sendCoordinates') {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        try {
-          ws.send(JSON.stringify({
-            type: 'videoCoordinates',
-            pageUrl: sender.tab?.url || '',
-            pageTitle: sender.tab?.title || '',
-            tabId: sender.tab?.id,
-            ...message.coordinates,
-            timestamp: Date.now()
-          }));
-        } catch (_) {}
-      }
+      sendWsMessage({
+        type: 'videoCoordinates',
+        pageUrl: sender.tab?.url || '',
+        pageTitle: sender.tab?.title || '',
+        tabId: sender.tab?.id,
+        ...message.coordinates,
+        timestamp: Date.now()
+      });
     }
   });
 
