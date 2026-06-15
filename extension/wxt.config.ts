@@ -1,11 +1,11 @@
 import { defineConfig } from 'wxt';
 
 export default defineConfig({
+  manifestVersion: 2,
   manifest: {
     name: 'Spectur',
     version: '1.0.0',
     description: 'Browser companion for the Tur download suite. Detects and transfers media stream contexts.',
-    manifest_version: 2,
     icons: {
       '16': 'icons/pebble180nobg.png',
       '32': 'icons/pebble180nobg.png',
@@ -29,6 +29,9 @@ export default defineConfig({
       'ws://127.0.0.1:6236/*',
       'http://localhost:6236/*',
       'ws://localhost:6236/*'
+    ],
+    web_accessible_resources: [
+      'icons/*.png'
     ]
   },
   vite: () => ({

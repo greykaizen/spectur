@@ -1,7 +1,7 @@
 import { defineContentScript } from 'wxt/sandbox';
 import { observeVideos } from '../overlay/detector';
 import { createOverlay, destroyOverlay } from '../overlay/ui';
-import { setupPositionTracker } from '../overlay/geometry';
+import { setupPositionTracker, getPlayerContainer } from '../overlay/geometry';
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -58,6 +58,10 @@ export default defineContentScript({
         const videoObserver = observeVideos(
           (video) => {
             let animationFrameId: number | null = null;
+            let container: HTMLElement = video;
+            try {
+              container = getPlayerContainer(video);
+            } catch (_) {}
 
             // Compute and transmit video dimensions + page alignment context
             function sendCoords() {
@@ -65,7 +69,7 @@ export default defineContentScript({
               
               animationFrameId = requestAnimationFrame(() => {
                 animationFrameId = null;
-                const rect = video.getBoundingClientRect();
+                const rect = container.getBoundingClientRect();
                 
                 const coordinates = {
                   x: rect.left,
@@ -86,7 +90,7 @@ export default defineContentScript({
 
             // Register ResizeObserver for player resizing transitions (e.g. theater mode)
             const resizeObserver = new ResizeObserver(sendCoords);
-            resizeObserver.observe(video);
+            resizeObserver.observe(container);
 
             // Sync layout positions on scroll, window resize, and fullscreen events
             const handleViewportChange = () => {
